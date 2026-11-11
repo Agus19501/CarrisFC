@@ -1,114 +1,102 @@
-const STORAGE_KEY = "carris-fc-demo-v1";
 const HOME_VENUE = "Estadio Jesuitas";
+const API_BASE_URL = ["localhost", "127.0.0.1"].includes(window.location.hostname)
+  ? `${window.location.protocol}//${window.location.hostname}:10000`
+  : "";
 
-const initialState = {
-  match: { round: 8, opponent: "Atlético Norte", date: "Sábado, 15 de noviembre", time: "17:30", venue: HOME_VENUE },
-  maxCalled: 8,
-  teams: ["Carris FC", "Atlético Norte", "CD Alameda", "Sporting Vega", "Unión Río", "Descanso"],
-  players: [
-    { id: 1, dorsal: 1, name: "Álvaro Martín", position: "Portero", goals: 0, yellow: 1, red: 0, status: "called", immunity: false, infiniteImmunity: true, color: "#b8ceaa" },
-    { id: 2, dorsal: 2, name: "Diego López", position: "Defensa", goals: 1, yellow: 2, red: 0, status: "called", immunity: false, infiniteImmunity: false, color: "#d9b7a3" },
-    { id: 3, dorsal: 3, name: "Sergio Ruiz", position: "Defensa", goals: 0, yellow: 1, red: 0, status: "called", immunity: false, infiniteImmunity: false, color: "#a8bac3" },
-    { id: 4, dorsal: 4, name: "Pablo García", position: "Defensa", goals: 2, yellow: 0, red: 0, status: "called", immunity: false, infiniteImmunity: false, color: "#d1c392" },
-    { id: 5, dorsal: 5, name: "Hugo Pérez", position: "Centrocampista", goals: 3, yellow: 2, red: 0, status: "called", immunity: false, infiniteImmunity: false, color: "#cfacae" },
-    { id: 6, dorsal: 6, name: "Marcos Díaz", position: "Centrocampista", goals: 1, yellow: 1, red: 0, status: "called", immunity: false, infiniteImmunity: false, color: "#a8bea9" },
-    { id: 7, dorsal: 7, name: "Iker Sánchez", position: "Delantero", goals: 5, yellow: 0, red: 0, status: "called", immunity: false, infiniteImmunity: false, color: "#b5b2ca" },
-    { id: 8, dorsal: 8, name: "Adrián Torres", position: "Delantero", goals: 2, yellow: 1, red: 0, status: "called", immunity: false, infiniteImmunity: false, color: "#d0b38c" },
-    { id: 9, dorsal: 9, name: "Nico Romero", position: "Centrocampista", goals: 1, yellow: 0, red: 0, status: "personal", immunity: false, infiniteImmunity: false, color: "#b1bfce" },
-    { id: 10, dorsal: 10, name: "Mario Navarro", position: "Defensa", goals: 0, yellow: 1, red: 0, status: "personal", immunity: false, infiniteImmunity: false, color: "#c5b7a5" },
-    { id: 11, dorsal: 11, name: "Lucas Ortega", position: "Delantero", goals: 4, yellow: 1, red: 0, status: "lottery", immunity: true, infiniteImmunity: false, color: "#a9c5b9" },
-    { id: 12, dorsal: 12, name: "Samuel Castro", position: "Centrocampista", goals: 2, yellow: 2, red: 0, status: "lottery", immunity: true, infiniteImmunity: false, color: "#c6b7cd" }
-  ],
-  matches: [
-    { round: 7, date: "8 nov · 16:00", home: "Carris FC", away: "Unión Río", score: "3 — 1", scorers: "Iker Sánchez (2), Hugo Pérez", result: "Victoria en casa con una gran segunda parte.", playerStats: { "7": { goals: 2, yellow: 0, red: 0 }, "5": { goals: 1, yellow: 0, red: 0 } } },
-    { round: 6, date: "1 nov · 18:30", home: "Sporting Vega", away: "Carris FC", score: "2 — 2", scorers: "Lucas Ortega, Pablo García", result: "Un punto trabajado fuera de casa.", playerStats: { "11": { goals: 1, yellow: 0, red: 0 }, "4": { goals: 1, yellow: 0, red: 0 } } },
-    { round: 5, date: "25 oct · 17:00", home: "Carris FC", away: "CD Alameda", score: "1 — 0", scorers: "Marcos Díaz", result: "Portería a cero y tres puntos para el equipo.", playerStats: { "6": { goals: 1, yellow: 0, red: 0 } } },
-    { round: 8, date: "15 nov · 17:30", home: "Carris FC", away: "Atlético Norte", score: "—", scorers: "Por jugar", result: "¡Te esperamos!", venue: HOME_VENUE, playerStats: {} }
-  ],
-  callup: { availableIds: [1, 2, 3, 4, 5, 6, 7, 8, 11, 12], desiredPlayers: 8, fixedIds: [], entrantIds: [], excludedIds: [], created: false, completed: false },
-  callupHistory: []
-};
-
-let state = loadState();
+let state = null;
+let adminSession = { authenticated: false, email: "" };
+let csrfToken = "";
+let stateSaveInProgress = false;
 let activePage = "inicio";
 let matchFilter = "todos";
 let editingMatchIndex = null;
 let toastTimer;
 
-function loadState() {
+async function apiRequest(path, { method = "GET", body, csrf = false } = {}) {
+  const headers = {};
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+  if (csrf) headers["X-CSRF-Token"] = csrfToken;
+
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method,
+    credentials: "include",
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body)
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(payload.error || "No se pudo completar la solicitud.");
+    error.status = response.status;
+    throw error;
+  }
+  return payload;
+}
+
+async function refreshCsrfToken() {
+  const result = await apiRequest("/api/auth/csrf");
+  csrfToken = result.csrfToken;
+}
+
+async function loadState() {
+  const result = await apiRequest("/api/state");
+  if (!result || !result.match || !Array.isArray(result.players) || !Array.isArray(result.matches)) {
+    throw new Error("La API devolvió datos del club con un formato inesperado.");
+  }
+  return result;
+}
+
+async function initializeApp() {
+  document.querySelector("#page-inicio").innerHTML = `<div class="card empty-state connection-loading">Conectando con la base de datos de Carris FC…</div>`;
   try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (!saved) return structuredClone(initialState);
-    const parsed = JSON.parse(saved);
-    if (!Array.isArray(parsed.players) || !parsed.match || !Array.isArray(parsed.matches)) return structuredClone(initialState);
-    parsed.teams = Array.from(new Set(["Carris FC", ...(Array.isArray(parsed.teams) ? parsed.teams : parsed.matches.flatMap(match => [match.home, match.away])), "Descanso"]));
-    const usedDorsals = new Set();
-    parsed.players.forEach(player => {
-      let dorsal = Number(player.dorsal);
-      if (!Number.isInteger(dorsal) || dorsal < 1 || dorsal > 99 || usedDorsals.has(dorsal)) {
-        dorsal = 1;
-        while (usedDorsals.has(dorsal)) dorsal++;
-      }
-      player.dorsal = dorsal;
-      usedDorsals.add(dorsal);
-      player.infiniteImmunity = Boolean(player.infiniteImmunity || String(player.position).toLowerCase() === "portero");
-      if (typeof player.immunity !== "boolean") player.immunity = false;
-      if (String(player.position).toLowerCase() === "portero" && player.status === "lottery") player.status = "called";
-    });
-    parsed.matches.forEach(match => {
-      if (!match.playerStats || typeof match.playerStats !== "object") match.playerStats = {};
-      match.venue = isRestMatch(match) ? "" : HOME_VENUE;
-      if (match.score === "—" && !isRestMatch(match) && /^Campo (Municipal|por confirmar)/i.test(match.result || "")) {
-        match.result = "¡Te esperamos!";
-      }
-    });
-    parsed.match.venue = HOME_VENUE;
-    if (!Number.isInteger(parsed.match.round)) {
-      const upcoming = parsed.matches.find(match => match.score === "—");
-      parsed.match.round = upcoming ? upcoming.round : 8;
-    }
-    if (!parsed.callup || !Array.isArray(parsed.callup.availableIds)) {
-      parsed.callup = {
-        availableIds: parsed.players.filter(player => player.status !== "personal").map(player => player.id),
-        desiredPlayers: parsed.maxCalled || 8,
-        fixedIds: [],
-        entrantIds: [],
-        excludedIds: [],
-        created: false,
-        completed: false
-      };
-    }
-    if (!Array.isArray(parsed.callupHistory)) {
-      parsed.callupHistory = [];
-      if (parsed.callup.completed) {
-        const calledIds = parsed.callup.fixedIds || [];
-        const excludedIds = parsed.callup.excludedIds || [];
-        parsed.callupHistory.push({
-          round: parsed.match.round || 8,
-          date: parsed.match.date || "",
-          statuses: Object.fromEntries(parsed.players.map(player => [
-            String(player.id),
-            excludedIds.some(id => String(id) === String(player.id)) ? "lottery" :
-              calledIds.some(id => String(id) === String(player.id)) ? "called" : "personal"
-          ]))
-        });
-      }
-    }
-    return parsed;
+    await refreshCsrfToken();
+    adminSession = await apiRequest("/api/auth/session");
+    state = await loadState();
+    updateAdminControls();
+    renderAll();
   } catch (error) {
-    console.error("No se pudieron cargar los datos guardados de Carris FC.", error);
-    return structuredClone(initialState);
+    console.error("No se pudo conectar con Carris FC.", error);
+    renderConnectionError(error);
   }
 }
 
-function saveState(message) {
+function renderConnectionError(error) {
+  activePage = "inicio";
+  document.querySelectorAll(".page").forEach(page => page.classList.toggle("active", page.id === "page-inicio"));
+  document.querySelector("#current-section").textContent = "INICIO";
+  document.querySelector("#page-inicio").innerHTML = `
+    <section class="card connection-error">
+      <h1>No se pudo conectar con Carris FC</h1>
+      <p>${escapeHtml(error.message || "Comprueba la conexión e inténtalo de nuevo.")}</p>
+      <button class="primary-button" data-action="retry-connection">Reintentar</button>
+    </section>`;
+}
+
+async function saveState(message) {
+  if (stateSaveInProgress) {
+    showToast("Espera a que termine el guardado actual.");
+    return;
+  }
+  stateSaveInProgress = true;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    const result = await apiRequest("/api/state", { method: "PUT", body: state, csrf: true });
+    state = result.state;
     renderAll();
     if (message) showToast(message);
   } catch (error) {
-    console.error("No se pudieron guardar los cambios de Carris FC.", error);
-    showToast("No se han podido guardar los cambios. Comprueba el almacenamiento del navegador.");
+    console.error("No se pudieron guardar los datos del club.", error);
+    try {
+      state = await loadState();
+      adminSession = await apiRequest("/api/auth/session");
+      if (error.status === 401 || error.status === 403) await refreshCsrfToken();
+      updateAdminControls(false);
+      renderAll();
+    } catch (reloadError) {
+      console.error("No se pudieron recuperar los datos del servidor.", reloadError);
+      renderConnectionError(reloadError);
+    }
+    showToast(error.message || "No se pudieron guardar los cambios.");
+  } finally {
+    stateSaveInProgress = false;
   }
 }
 
@@ -174,7 +162,7 @@ function showToast(message) {
 }
 
 function adminBanner() {
-  return `<div class="admin-banner">⚙ <span>Modo administrador de demostración · Los cambios se guardan en este navegador, no en un servidor.</span></div>`;
+  return `<div class="admin-banner">⚙ <span>Sesión de administrador segura · Los cambios se guardan en la base de datos.</span></div>`;
 }
 
 function renderHome() {
@@ -183,6 +171,7 @@ function renderHome() {
   const lottery = absentees("lottery");
   const match = state.match;
   const isRest = match.opponent === "Descanso";
+  const hasUpcomingMatch = Boolean(match.opponent);
   document.querySelector("#page-inicio").innerHTML = `
     ${adminBanner()}
     <div class="welcome-copy">
@@ -190,14 +179,14 @@ function renderHome() {
       <div class="welcome-date">JORNADA ${match.round || 8}<br>TEMPORADA 25/26</div>
     </div>
     <section class="hero-match" aria-label="Próximo partido">
-      <div class="hero-top"><span>JORNADA ${match.round || 8} · ${isRest ? "JORNADA DE DESCANSO" : "PRÓXIMO PARTIDO"}</span><span class="match-status"><i class="live-dot"></i> ${isRest ? "ESTA SEMANA DESCANSAMOS" : "ENCUENTRO PRÓXIMO"}</span></div>
-      ${isRest ? `<div class="rest-matchup"><div class="team-crest"><img src="assets/carris-escudo.jpg" alt=""></div><span class="rest-icon">Ⅱ</span><div><strong>Esta jornada descansamos</strong><small>La liga nos da un respiro. ¡Nos vemos en la próxima!</small></div></div>` : `
+      <div class="hero-top"><span>${hasUpcomingMatch ? `JORNADA ${match.round} · ${isRest ? "JORNADA DE DESCANSO" : "PRÓXIMO PARTIDO"}` : "PRÓXIMO PARTIDO"}</span><span class="match-status"><i class="live-dot"></i> ${isRest ? "ESTA SEMANA DESCANSAMOS" : hasUpcomingMatch ? "ENCUENTRO PRÓXIMO" : "PENDIENTE DE PROGRAMAR"}</span></div>
+      ${isRest ? `<div class="rest-matchup"><div class="team-crest"><img src="assets/carris-escudo.jpg" alt=""></div><span class="rest-icon">Ⅱ</span><div><strong>Esta jornada descansamos</strong><small>La liga nos da un respiro. ¡Nos vemos en la próxima!</small></div></div>` : !hasUpcomingMatch ? `<div class="rest-matchup"><div class="team-crest"><img src="assets/carris-escudo.jpg" alt=""></div><span class="rest-icon">◷</span><div><strong>Partido pendiente de programar</strong><small>Pronto publicaremos los detalles de la próxima jornada.</small></div></div>` : `
         <div class="matchup">
           <div class="team"><div class="team-crest"><img src="assets/carris-escudo.jpg" alt=""></div><div><div class="team-name">Carris FC</div><div class="team-caption">EL EQUIPO DE CASA</div></div></div>
           <div class="versus">VS</div>
           <div class="team"><div class="team-crest opponent">${escapeHtml(match.opponent.split(/\s+/).map(w => w[0]).slice(0, 2).join("").toUpperCase())}</div><div><div class="team-name">${escapeHtml(match.opponent)}</div><div class="team-caption">EL PRÓXIMO RETO</div></div></div>
         </div>`}
-      <div class="match-info"><span><b>◷</b> ${escapeHtml(match.date)}${isRest || match.time === "—" ? "" : ` · ${escapeHtml(match.time)}`}</span>${isRest ? "" : `<span><b>⌖</b> ${HOME_VENUE}</span>`}</div>
+      <div class="match-info">${match.date ? `<span><b>◷</b> ${escapeHtml(match.date)}${isRest || match.time === "—" ? "" : ` · ${escapeHtml(match.time)}`}</span>` : ""}${isRest || !hasUpcomingMatch ? "" : `<span><b>⌖</b> ${HOME_VENUE}</span>`}</div>
     </section>
     <div class="dashboard-grid">
       <section class="card">
@@ -440,7 +429,7 @@ function renderCreateCallup() {
 }
 
 function adminPanel() {
-  return `<section class="card admin-panel"><h2>Herramientas de administración</h2><p>Gestiona la convocatoria, las estadísticas y el próximo encuentro. Los cambios se guardan en este dispositivo.</p><p class="immunity-help">El portero es siempre fijo. La inmunidad temporal dura una jornada; la infinita mantiene al jugador fuera del sorteo hasta que la desactives.</p>
+  return `<section class="card admin-panel"><h2>Herramientas de administración</h2><p>Gestiona la convocatoria, las estadísticas y el próximo encuentro. Los cambios se guardan en la base de datos.</p><p class="immunity-help">El portero es siempre fijo. La inmunidad temporal dura una jornada; la infinita mantiene al jugador fuera del sorteo hasta que la desactives.</p>
     <div class="edit-fields">
       <div class="field"><label for="edit-opponent">Rival</label><input id="edit-opponent" value="${escapeHtml(state.match.opponent)}"></div>
       <div class="field"><label for="edit-date">Día del partido</label><input id="edit-date" value="${escapeHtml(state.match.date)}"></div>
@@ -471,15 +460,74 @@ function renderAll() {
   document.querySelectorAll(".filter-chip").forEach(button => button.classList.toggle("active", button.dataset.filter === matchFilter));
 }
 
-function setAdmin() {
-  document.body.classList.toggle("admin-mode");
-  const enabled = document.body.classList.contains("admin-mode");
+function updateAdminControls(render = true) {
+  const enabled = Boolean(adminSession && adminSession.authenticated);
+  document.body.classList.toggle("admin-mode", enabled);
   document.querySelector("#admin-label").textContent = enabled ? "Salir del modo administrador" : "Acceso administrador";
   document.querySelector("#admin-toggle").classList.toggle("admin-on", enabled);
   document.querySelector("#mobile-admin").setAttribute("aria-label", enabled ? "Salir del modo administrador" : "Activar modo administrador");
   if (!enabled && activePage === "crear-convocatoria") activePage = "inicio";
-  showToast(enabled ? "Modo de demostración activado. No es un acceso protegido." : "Has salido del modo administrador.");
-  renderAll();
+  if (render && state) renderAll();
+}
+
+function openAdminLogin() {
+  const dialog = document.querySelector("#admin-login-dialog");
+  document.querySelector("#admin-login-form").reset();
+  document.querySelector("#login-error").hidden = true;
+  dialog.showModal();
+  document.querySelector("#login-email").focus();
+}
+
+async function handleAdminLogin(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const submitButton = form.querySelector('[type="submit"]');
+  const errorMessage = document.querySelector("#login-error");
+  const email = document.querySelector("#login-email").value.trim();
+  const password = document.querySelector("#login-password").value;
+  submitButton.disabled = true;
+  errorMessage.hidden = true;
+  try {
+    await refreshCsrfToken();
+    const result = await apiRequest("/api/auth/login", {
+      method: "POST",
+      body: { email, password },
+      csrf: true
+    });
+    csrfToken = result.csrfToken;
+    adminSession = { authenticated: true, email: result.email };
+    document.querySelector("#admin-login-dialog").close();
+    form.reset();
+    updateAdminControls();
+    showToast("Sesión de administrador iniciada.");
+  } catch (error) {
+    errorMessage.textContent = error.message || "No se pudo iniciar sesión.";
+    errorMessage.hidden = false;
+  } finally {
+    submitButton.disabled = false;
+  }
+}
+
+async function logoutAdmin() {
+  try {
+    await apiRequest("/api/auth/logout", { method: "POST", csrf: true });
+    csrfToken = "";
+    adminSession = await apiRequest("/api/auth/session");
+    await refreshCsrfToken();
+    updateAdminControls();
+    showToast("Sesión cerrada.");
+  } catch (error) {
+    console.error("No se pudo cerrar la sesión.", error);
+    showToast(error.message || "No se pudo cerrar la sesión.");
+  }
+}
+
+function handleAdminToggle() {
+  if (adminSession && adminSession.authenticated) {
+    logoutAdmin();
+    return;
+  }
+  openAdminLogin();
 }
 
 function recordCallupHistory(calledIds, excludedIds) {
@@ -579,6 +627,7 @@ document.addEventListener("change", event => {
 });
 
 document.addEventListener("click", event => {
+  if (!state && !event.target.closest('[data-action="retry-connection"]')) return;
   const nav = event.target.closest("[data-page], [data-go]");
   if (nav) {
     activePage = nav.dataset.page || nav.dataset.go;
@@ -586,7 +635,11 @@ document.addEventListener("click", event => {
     window.scrollTo({ top: 0, behavior: "smooth" });
     return;
   }
-  if (event.target.closest("#admin-toggle, #mobile-admin")) { setAdmin(); return; }
+  if (event.target.closest("#admin-toggle, #mobile-admin")) { handleAdminToggle(); return; }
+  if (event.target.closest("[data-close-login]")) {
+    document.querySelector("#admin-login-dialog").close();
+    return;
+  }
   const filter = event.target.closest("[data-filter]");
   if (filter) { matchFilter = filter.dataset.filter; editingMatchIndex = null; renderMatches(); return; }
   const fixture = event.target.closest("[data-fixture]");
@@ -598,7 +651,9 @@ document.addEventListener("click", event => {
   }
   const action = event.target.closest("[data-action]");
   if (!action) return;
-  if (action.dataset.action === "edit-match") {
+  if (action.dataset.action === "retry-connection") {
+    initializeApp();
+  } else if (action.dataset.action === "edit-match") {
     editingMatchIndex = Number(action.dataset.matchIndex);
     renderMatches();
   } else if (action.dataset.action === "cancel-match-edit") {
@@ -799,4 +854,5 @@ document.addEventListener("click", event => {
   }
 });
 
-renderAll();
+document.querySelector("#admin-login-form").addEventListener("submit", handleAdminLogin);
+initializeApp();

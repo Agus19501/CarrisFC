@@ -62,6 +62,18 @@
       <footer class="site-footer"><span>CARRIS FC</span><span>Hechos de equipo. Hechos de fútbol.</span><span>© 2025</span></footer>
     </main>
   </div>
+  <dialog class="login-dialog" id="admin-login-dialog" aria-labelledby="login-title">
+    <form id="admin-login-form">
+      <div class="login-dialog-heading">
+        <div><div class="eyebrow">ACCESO PROTEGIDO</div><h2 id="login-title">Administración</h2></div>
+        <button class="login-close" type="button" data-close-login aria-label="Cerrar">×</button>
+      </div>
+      <label class="field"><span>Correo electrónico</span><input id="login-email" type="email" autocomplete="username" maxlength="254" required></label>
+      <label class="field"><span>Contraseña</span><input id="login-password" type="password" autocomplete="current-password" required></label>
+      <p class="login-error" id="login-error" role="alert" hidden></p>
+      <div class="login-actions"><button class="secondary-button" type="button" data-close-login>Cancelar</button><button class="primary-button" type="submit">Iniciar sesión</button></div>
+    </form>
+  </dialog>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script src="app.js"></script>
 </body>
