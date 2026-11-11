@@ -1,1 +1,4 @@
 /Reedme.md
+backend/.env
+backend/node_modules/
+/.netlify/

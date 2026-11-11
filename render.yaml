@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: carris-fc-api
+    runtime: node
+    rootDir: backend
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: MONGODB_URI
+        sync: false
+      - key: FRONTEND_ORIGINS
+        sync: false
+      - key: NODE_ENV
+        value: production
