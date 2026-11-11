@@ -18,3 +18,24 @@ test("rejects duplicated player dorsals", () => {
   ];
   assert.throws(() => validateState(input), /dorsales deben ser únicos/);
 });
+
+test("stores match dates as calendar dates with a separate kick-off time", () => {
+  const input = createEmptyState();
+  input.matches.push({
+    round: 4,
+    date: "2026-11-15",
+    time: "10:30",
+    home: "Carris FC",
+    away: "Descanso",
+    score: "—",
+    scorers: "Jornada de descanso",
+    result: "Esta jornada descansamos.",
+    playerStats: {}
+  });
+  const state = validateState(input);
+  assert.equal(state.matches[0].date, "2026-11-15");
+  assert.equal(state.matches[0].time, "10:30");
+
+  input.matches[0].date = "2026-02-31";
+  assert.throws(() => validateState(input), /fecha válida/);
+});

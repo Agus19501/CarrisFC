@@ -12,6 +12,97 @@ let matchFilter = "todos";
 let editingMatchIndex = null;
 let toastTimer;
 
+function dateToISO(value) {
+  const input = String(value || "").trim();
+  let year;
+  let month;
+  let day;
+  let match = input.match(/^(\d{4})-(\d{2})-(\d{2})(?:$|T)/);
+  if (match) {
+    year = Number(match[1]);
+    month = Number(match[2]);
+    day = Number(match[3]);
+  } else {
+    match = input.match(/(?:^|\D)(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\D|$)/);
+    if (!match) return "";
+    day = Number(match[1]);
+    month = Number(match[2]);
+    year = Number(match[3]);
+  }
+  const check = new Date(Date.UTC(year, month - 1, day));
+  if (check.getUTCFullYear() !== year || check.getUTCMonth() !== month - 1 || check.getUTCDate() !== day) return "";
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+function localDateISO() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+}
+
+function formatDate(value) {
+  const isoDate = dateToISO(value);
+  if (!isoDate) return String(value || "");
+  const [year, month, day] = isoDate.split("-").map(Number);
+  return new Intl.DateTimeFormat("es-ES", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC"
+  }).format(new Date(Date.UTC(year, month - 1, day)));
+}
+
+function validTime(value) {
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(String(value || "")) ? value : "";
+}
+
+function timeFromLegacyDate(value) {
+  const match = String(value || "").match(/\b([01]\d|2[0-3]):[0-5]\d\b/);
+  return match ? match[0] : "";
+}
+
+function formatMatchDate(match) {
+  const date = formatDate(match.date);
+  const time = validTime(match.time) || timeFromLegacyDate(match.date);
+  return [date, time].filter(Boolean).join(" · ");
+}
+
+function nextRoundNumber(targetState = state) {
+  const latestMatchRound = Math.max(0, ...targetState.matches.map(match => Number(match.round) || 0));
+  const latestHistoryRound = Math.max(0, ...targetState.callupHistory.map(entry => Number(entry.round) || 0));
+  return Math.max(Number(targetState.match.round) || 1, latestMatchRound + 1, latestHistoryRound + 1);
+}
+
+function setNextMatchFromFixture(match, targetState = state) {
+  const opponent = match.home === "Carris FC" ? match.away : match.home;
+  targetState.match = {
+    round: match.round,
+    opponent,
+    date: dateToISO(match.date),
+    time: validTime(match.time) || "—",
+    venue: opponent === "Descanso" ? "" : HOME_VENUE
+  };
+}
+
+function syncNextMatchFromSchedule(targetState = state) {
+  const today = localDateISO();
+  const nextFixture = targetState.matches
+    .filter(match => match.score === "—" && dateToISO(match.date) >= today)
+    .sort((a, b) => dateToISO(a.date).localeCompare(dateToISO(b.date)) || a.round - b.round)[0];
+  const currentDate = dateToISO(targetState.match.date);
+  if (nextFixture && (!currentDate || currentDate < today || dateToISO(nextFixture.date) <= currentDate)) {
+    setNextMatchFromFixture(nextFixture, targetState);
+  } else if (!nextFixture && targetState.match.opponent && (!currentDate || currentDate < today)) {
+    targetState.match = {
+      round: nextRoundNumber(targetState),
+      opponent: "",
+      date: "",
+      time: "—",
+      venue: HOME_VENUE
+    };
+  }
+}
+
 async function apiRequest(path, { method = "GET", body, csrf = false } = {}) {
   const headers = {};
   if (body !== undefined) headers["Content-Type"] = "application/json";
@@ -42,6 +133,17 @@ async function loadState() {
   if (!result || !result.match || !Array.isArray(result.players) || !Array.isArray(result.matches)) {
     throw new Error("La API devolvió datos del club con un formato inesperado.");
   }
+  result.match.date = dateToISO(result.match.date);
+  if (!validTime(result.match.time) && result.match.time !== "—") result.match.time = "—";
+  result.matches.forEach(match => {
+    const originalDate = match.date;
+    match.date = dateToISO(originalDate);
+    if (!validTime(match.time)) match.time = timeFromLegacyDate(originalDate);
+  });
+  result.callupHistory.forEach(entry => {
+    entry.date = dateToISO(entry.date) || entry.date;
+  });
+  syncNextMatchFromSchedule(result);
   return result;
 }
 
@@ -186,7 +288,7 @@ function renderHome() {
           <div class="versus">VS</div>
           <div class="team"><div class="team-crest opponent">${escapeHtml(match.opponent.split(/\s+/).map(w => w[0]).slice(0, 2).join("").toUpperCase())}</div><div><div class="team-name">${escapeHtml(match.opponent)}</div><div class="team-caption">EL PRÓXIMO RETO</div></div></div>
         </div>`}
-      <div class="match-info">${match.date ? `<span><b>◷</b> ${escapeHtml(match.date)}${isRest || match.time === "—" ? "" : ` · ${escapeHtml(match.time)}`}</span>` : ""}${isRest || !hasUpcomingMatch ? "" : `<span><b>⌖</b> ${HOME_VENUE}</span>`}</div>
+      <div class="match-info">${match.date ? `<span><b>◷</b> ${escapeHtml(formatMatchDate(match))}</span>` : ""}${isRest || !hasUpcomingMatch ? "" : `<span><b>⌖</b> ${HOME_VENUE}</span>`}</div>
     </section>
     <div class="dashboard-grid">
       <section class="card">
@@ -246,77 +348,96 @@ function renderSquad() {
   `;
 }
 
-function leagueManagementPanel() {
+function leagueTeamsPanel() {
   const teams = Array.isArray(state.teams) ? state.teams : [];
-  const nextRound = Math.max(0, ...state.matches.map(match => Number(match.round) || 0)) + 1;
   return `
-    <section class="card admin-panel league-admin-panel">
-      <h2>Equipos de la clasificación</h2>
-      <p>Edita los nombres de los equipos de la liga. Carris FC y Descanso son opciones fijas.</p>
-      <div class="league-team-list">${teams.map((team, index) => `<div class="league-team-row"><span class="team-number">${index + 1}</span><input data-team-index="${index}" value="${escapeHtml(team)}" ${team === "Carris FC" || team === "Descanso" ? "readonly" : ""} aria-label="Equipo ${index + 1}"><span class="team-kind">${team === "Descanso" ? "Jornada especial" : team === "Carris FC" ? "Nuestro equipo" : "Equipo de liga"}</span></div>`).join("")}</div>
-      <div class="admin-actions"><button class="primary-button" data-action="save-teams">Guardar equipos</button></div>
-      <div class="edit-fields team-add-fields">
-        <div class="field"><label for="new-team-name">Añadir equipo</label><input id="new-team-name" placeholder="Nombre del equipo"></div>
-        <div class="field team-add-action"><label>&nbsp;</label><button class="secondary-button" data-action="add-team">Añadir a la lista</button></div>
+    <details class="card league-admin-panel">
+      <summary>Editar equipos de la liga</summary>
+      <div class="league-team-content">
+        <p>Carris FC y Descanso son opciones fijas.</p>
+        <div class="league-team-list">${teams.map((team, index) => `<div class="league-team-row"><span class="team-number">${index + 1}</span><input data-team-index="${index}" value="${escapeHtml(team)}" ${team === "Carris FC" || team === "Descanso" ? "readonly" : ""} aria-label="Equipo ${index + 1}"><span class="team-kind">${team === "Descanso" ? "Jornada especial" : team === "Carris FC" ? "Nuestro equipo" : "Equipo de liga"}</span></div>`).join("")}</div>
+        <div class="admin-actions"><button class="primary-button" data-action="save-teams">Guardar equipos</button></div>
+        <div class="edit-fields team-add-fields">
+          <div class="field"><label for="new-team-name">Añadir equipo</label><input id="new-team-name" placeholder="Nombre del equipo"></div>
+          <div class="field team-add-action"><label>&nbsp;</label><button class="secondary-button" data-action="add-team">Añadir a la lista</button></div>
+        </div>
       </div>
-    </section>
-    <section class="card admin-panel fixture-create-panel">
-      <h2>Añadir jornada</h2>
-      <p>Crea un partido para Carris FC o registra la jornada de descanso de la liga.</p>
+    </details>`;
+}
+
+function fixtureCreatePanel() {
+  const teams = Array.isArray(state.teams) ? state.teams : [];
+  return `
+    <section class="card fixture-create-panel">
+      <h2>Añadir partido</h2>
+      <p>Selecciona la fecha del calendario. Las jornadas pasadas no reemplazan el próximo partido.</p>
       <div class="edit-fields">
-        <div class="field"><label for="new-match-round">Jornada</label><input id="new-match-round" type="number" min="1" value="${nextRound}"></div>
-        <div class="field"><label for="new-match-date">Fecha</label><input id="new-match-date" placeholder="Ej.: Sábado, 22 de noviembre"></div>
-        <div class="field" data-regular-match-field><label for="new-match-time">Hora</label><input id="new-match-time" placeholder="Ej.: 17:30"></div>
+        <div class="field"><label for="new-match-round">Jornada</label><input id="new-match-round" type="number" min="1" value="${nextRoundNumber()}"></div>
+        <div class="field"><label for="new-match-date">Fecha</label><input id="new-match-date" type="date" required></div>
+        <div class="field" data-regular-match-field><label for="new-match-time">Hora</label><input id="new-match-time" type="time" required></div>
         <div class="field"><label for="new-match-opponent">Rival</label><select id="new-match-opponent">${teams.filter(team => team !== "Carris FC").map(team => `<option value="${escapeHtml(team)}">${escapeHtml(team === "Descanso" ? "Descanso de liga" : team)}</option>`).join("")}</select></div>
         <div class="field" data-regular-match-field><label for="new-match-location">¿Dónde jugamos?</label><select id="new-match-location"><option value="local">En casa</option><option value="visitante">Como visitantes</option></select></div>
         <p class="fixed-venue-note" data-regular-match-field>Todos los partidos se juegan en <strong>${HOME_VENUE}</strong>.</p>
       </div>
-      <div class="admin-actions"><button class="primary-button" data-action="add-fixture">Crear jornada</button></div>
+      <div class="admin-actions"><button class="primary-button" data-action="add-fixture">Añadir a partidos</button></div>
     </section>`;
 }
 
 function renderMatches() {
-  const matches = state.matches.filter(match => matchFilter === "todos" || (match.score === "—" ? matchFilter === "proximos" : matchFilter === "jugados"));
+  const isAdmin = document.body.classList.contains("admin-mode");
+  const matches = state.matches
+    .filter(match => matchFilter === "todos" ||
+      (matchFilter === "jugados" ? match.score !== "—" : match.score === "—"))
+    .slice()
+    .sort((a, b) => {
+      const dateOrder = dateToISO(a.date).localeCompare(dateToISO(b.date));
+      return dateOrder || a.round - b.round;
+    });
   document.querySelector("#page-partidos").innerHTML = `
     ${adminBanner()}
-    <div class="page-heading"><div><div class="eyebrow">EL CAMINO DEL EQUIPO</div><h1 id="matches-title">Partidos</h1><p>Cada jornada, cada esfuerzo, cada resultado.</p></div><span class="count-pill">${state.matches.length} jornadas</span></div>
-    ${activePage === "partidos" ? adminPanel() : ""}
-    ${activePage === "partidos" && document.body.classList.contains("admin-mode") ? leagueManagementPanel() : ""}
-    <div class="filter-row" style="margin-bottom:15px">${[["todos","Todos los partidos"],["jugados","Jugados"],["proximos","Próximos"]].map(([value,label])=>`<button class="filter-chip ${matchFilter===value?"active":""}" data-filter="${value}">${label}</button>`).join("")}</div>
-    <div class="fixture-list">${matches.slice().sort((a,b)=>b.round-a.round).map(match => {
+    <div class="page-heading"><div><div class="eyebrow">EL CAMINO DEL EQUIPO</div><h1 id="matches-title">Partidos</h1><p>Crea jornadas y registra resultados, goles y tarjetas desde cada partido.</p></div><span class="count-pill">${state.matches.length} jornadas</span></div>
+    ${activePage === "partidos" && isAdmin ? fixtureCreatePanel() : ""}
+    <div class="filter-row match-filter-row">${[["todos","Todos"],["jugados","Jugados"],["pendientes","Pendientes"]].map(([value,label])=>`<button class="filter-chip ${matchFilter===value?"active":""}" data-filter="${value}">${label}</button>`).join("")}</div>
+    <div class="fixture-list">${matches.map(match => {
       const matchIndex = state.matches.indexOf(match);
-      const isUpcoming = match.score === "—";
+      const hasResult = match.score !== "—";
+      const date = dateToISO(match.date);
+      const isUpcoming = hasResult === false && date !== "" && date >= localDateISO();
       const isRest = isRestMatch(match);
       const scorers = matchScorers(match) || match.scorers || "Sin goleadores añadidos";
       const editor = editingMatchIndex === matchIndex ? `
         <div class="match-edit-form">
           <div class="edit-fields">
             <div class="field"><label>Jornada</label><input data-match-field="round" type="number" min="1" value="${match.round}"></div>
-            <div class="field"><label>Fecha</label><input data-match-field="date" value="${escapeHtml(match.date)}"></div>
+            <div class="field"><label>Fecha</label><input data-match-field="date" type="date" value="${escapeHtml(date)}"></div>
+            <div class="field"><label>Hora</label><input data-match-field="time" type="time" value="${escapeHtml(validTime(match.time) || timeFromLegacyDate(match.date))}"></div>
             <div class="field"><label>Equipo local</label><input data-match-field="home" value="${escapeHtml(match.home)}"></div>
             <div class="field"><label>Equipo visitante</label><input data-match-field="away" value="${escapeHtml(match.away)}"></div>
-            <div class="field"><label>Resultado (— si está pendiente)</label><input data-match-field="score" value="${escapeHtml(match.score)}"></div>
+            <div class="field"><label>Resultado (goles local-visitante)</label><input data-match-field="score" value="${escapeHtml(match.score)}" placeholder="Ej.: 2-1"></div>
             <div class="field field-wide"><label>Detalles del partido</label><input data-match-field="result" value="${escapeHtml(match.result)}"></div>
           </div>
-          ${isRest ? "" : `<div class="match-stats-editor"><div class="eyebrow">GOLES Y TARJETAS DE CARRIS FC</div><div class="table-wrap"><table class="match-stats-table"><thead><tr><th>Jugador</th><th>Goles</th><th>Amarillas</th><th>Rojas</th></tr></thead><tbody>
+          ${isRest ? "" : `<div class="match-stats-editor"><div class="eyebrow">Estadísticas de Carris FC · goles y tarjetas por jugador</div><div class="table-wrap"><table class="match-stats-table"><thead><tr><th>Jugador</th><th>Goles</th><th>Amarillas</th><th>Rojas</th></tr></thead><tbody>
             ${state.players.map(player => {
               const stats = matchPlayerStats(match, player.id);
               return `<tr data-match-player-id="${player.id}"><td>${playerDorsal(player)} ${escapeHtml(player.name)}</td><td><input data-player-stat="goals" type="number" min="0" step="1" value="${Number(stats.goals || 0)}" aria-label="Goles de ${escapeHtml(player.name)}"></td><td><input data-player-stat="yellow" type="number" min="0" step="1" value="${Number(stats.yellow || 0)}" aria-label="Amarillas de ${escapeHtml(player.name)}"></td><td><input data-player-stat="red" type="number" min="0" step="1" value="${Number(stats.red || 0)}" aria-label="Rojas de ${escapeHtml(player.name)}"></td></tr>`;
             }).join("")}
           </tbody></table></div></div>`}
-          <div class="admin-actions"><button class="primary-button" data-action="save-existing-match" data-match-index="${matchIndex}">Guardar partido</button><button class="secondary-button" data-action="cancel-match-edit">Cancelar</button></div>
+          <div class="admin-actions"><button class="primary-button" data-action="save-existing-match" data-match-index="${matchIndex}">Guardar partido y resultado</button><button class="secondary-button" data-action="cancel-match-edit">Cancelar</button></div>
         </div>` : "";
+      const displayDate = formatMatchDate(match) || "Fecha por confirmar";
+      const status = hasResult ? "Jugado" : isUpcoming ? "Próximo partido" : "Pendiente de resultado";
       return `<article class="fixture-card">
         <button class="fixture-main fixture-toggle" type="button" data-fixture aria-expanded="false">
-          <span class="fixture-round">JORNADA ${match.round}</span>
-          ${isRest ? `<span class="fixture-teams rest-fixture"><span>Carris FC</span><span class="rest-pill">DESCANSO</span></span>` : `<span class="fixture-teams"><span>${escapeHtml(match.home)}</span><span class="fixture-score ${isUpcoming?"fixture-upcoming":""}">${escapeHtml(match.score)}</span><span>${escapeHtml(match.away)}</span></span>`}
-          <span class="fixture-date">${escapeHtml(match.date)}</span>
+          <span class="fixture-round">JORNADA ${match.round}<small>${status}</small></span>
+          ${isRest ? `<span class="fixture-teams rest-fixture"><span>Carris FC</span><span class="rest-pill">DESCANSO</span></span>` : `<span class="fixture-teams"><span>${escapeHtml(match.home)}</span><span class="fixture-score ${hasResult?"":"fixture-upcoming"}">${escapeHtml(match.score)}</span><span>${escapeHtml(match.away)}</span></span>`}
+          <span class="fixture-date">${escapeHtml(displayDate)}</span>
         </button>
-        <div class="fixture-detail">${isRest ? `<strong>Esta jornada descansamos.</strong><br>${escapeHtml(match.date)}` : `${isUpcoming ? `<strong>Próximo encuentro</strong><br>${escapeHtml(match.date)} · ${HOME_VENUE}` : `<strong>Goleadores: </strong>${escapeHtml(scorers)}<br><strong>Amarillas: </strong>${escapeHtml(matchCards(match, "yellow"))} · <strong>Rojas: </strong>${escapeHtml(matchCards(match, "red"))}<br><strong>Estadio: </strong>${HOME_VENUE}`}<br>${escapeHtml(match.result)}`}</div>
-        ${document.body.classList.contains("admin-mode") && !isUpcoming ? `<div class="fixture-actions"><button class="secondary-button match-edit-button" data-action="edit-match" data-match-index="${matchIndex}">Editar partido</button></div>` : ""}
+        <div class="fixture-detail">${isRest ? `<strong>Esta jornada descansamos.</strong><br>${escapeHtml(displayDate)}` : hasResult ? `<strong>Goleadores: </strong>${escapeHtml(scorers)}<br><strong>Amarillas: </strong>${escapeHtml(matchCards(match, "yellow"))} · <strong>Rojas: </strong>${escapeHtml(matchCards(match, "red"))}<br><strong>Estadio: </strong>${HOME_VENUE}` : `<strong>${isUpcoming ? "Próximo encuentro" : "Pendiente de resultado"}</strong><br>${escapeHtml(displayDate)} · ${HOME_VENUE}`}<br>${escapeHtml(match.result || "")}</div>
+        ${isAdmin ? `<div class="fixture-actions"><span class="fixture-admin-status">${status}</span><div class="fixture-action-buttons"><button class="secondary-button match-edit-button" data-action="edit-match" data-match-index="${matchIndex}">${hasResult ? "Editar resultado" : isUpcoming ? "Editar partido" : "Registrar resultado"}</button><button class="danger-button" data-action="delete-match" data-match-index="${matchIndex}" aria-label="Eliminar jornada ${match.round}">Eliminar</button></div></div>` : ""}
         ${editor}
       </article>`;
     }).join("") || `<div class="card empty-state">No hay partidos en esta categoría.</div>`}</div>
+    ${activePage === "partidos" && isAdmin ? leagueTeamsPanel() : ""}
   `;
 }
 
@@ -332,7 +453,6 @@ function renderCalls() {
   document.querySelector("#page-convocatorias").innerHTML = `
     ${adminBanner()}
     <div class="page-heading"><div><div class="eyebrow">LA LISTA DE CADA JORNADA</div><h1 id="calls-title">Desconvocados y ausencias</h1><p>Convocados, desconvocados por sorteo y ausencias personales.</p></div><span class="count-pill">Jornada ${state.match.round || 8}</span></div>
-    ${activePage === "convocatorias" ? adminPanel() : ""}
     <div class="call-summary"><div class="card summary-box"><strong>${called.length}</strong><span>Convocados</span></div><div class="card summary-box"><strong>${lottery.length}</strong><span>Desconvocados por sorteo</span></div><div class="card summary-box"><strong>${personal.length}</strong><span>Ausencias personales</span></div></div>
     ${groups.map(group=>`<section class="card availability-group"><div class="availability-title"><i class="status-dot ${group.kind}"></i>${group.title}<span class="count-pill">${group.players.length}</span></div><div class="availability-list">${group.players.length?group.players.map((player,index)=>`<div class="availability-person"><img src="${avatar(player,index)}" alt="Retrato de ${escapeHtml(player.name)}"><div><strong>${playerDorsal(player)} ${escapeHtml(player.name)}</strong><small>${escapeHtml(group.note)}${player.immunity&&group.kind==="lottery"?" · ✳ Inmune al siguiente sorteo":""}</small></div></div>`).join(""):`<div class="empty-state" style="grid-column:1/-1">No hay jugadores en esta categoría.</div>`}</div></section>`).join("")}
     <section class="card" style="padding:17px 18px"><div class="card-title"><span class="title-mark">✳</span><h2>¿Cómo funciona el pase de inmunidad?</h2></div><p style="margin:10px 0 0 35px;color:#7a867d;font-size:10px;line-height:1.7">Quien queda fuera por sorteo recibe inmunidad para el siguiente sorteo: no podrá volver a salir elegido en esa ocasión. La inmunidad no se aplica a las ausencias por motivos personales.</p></section>
@@ -357,7 +477,7 @@ function renderCallupHistory() {
         <table class="history-table">
           <thead><tr><th>Jugador</th>${rounds.map(round => {
             const entry = history.find(item => Number(item.round) === round);
-            return `<th><span>J${round}</span>${entry && entry.date ? `<small>${escapeHtml(entry.date)}</small>` : ""}</th>`;
+            return `<th><span>J${round}</span>${entry && entry.date ? `<small>${escapeHtml(formatDate(entry.date))}</small>` : ""}</th>`;
           }).join("")}<th>Resumen</th></tr></thead>
           <tbody>${state.players.map((player, index) => {
             const statusCounts = { called: 0, personal: 0, lottery: 0 };
@@ -432,16 +552,16 @@ function adminPanel() {
   return `<section class="card admin-panel"><h2>Herramientas de administración</h2><p>Gestiona la convocatoria, las estadísticas y el próximo encuentro. Los cambios se guardan en la base de datos.</p><p class="immunity-help">El portero es siempre fijo. La inmunidad temporal dura una jornada; la infinita mantiene al jugador fuera del sorteo hasta que la desactives.</p>
     <div class="edit-fields">
       <div class="field"><label for="edit-opponent">Rival</label><input id="edit-opponent" value="${escapeHtml(state.match.opponent)}"></div>
-      <div class="field"><label for="edit-date">Día del partido</label><input id="edit-date" value="${escapeHtml(state.match.date)}"></div>
-      <div class="field"><label for="edit-time">Hora</label><input id="edit-time" value="${escapeHtml(state.match.time)}"></div>
+      <div class="field"><label for="edit-date">Fecha del próximo partido</label><input id="edit-date" type="date" value="${escapeHtml(dateToISO(state.match.date))}"></div>
+      <div class="field"><label for="edit-time">Hora</label><input id="edit-time" type="time" value="${escapeHtml(validTime(state.match.time))}"></div>
       <p class="fixed-venue-note">La sede es fija para todos los partidos: <strong>${HOME_VENUE}</strong>.</p>
       <div class="field"><label for="new-player">Añadir jugador</label><input id="new-player" placeholder="Nombre y apellidos"></div>
       <div class="field"><label for="new-position">Posición</label><select id="new-position"><option>Portero</option><option>Defensa</option><option>Centrocampista</option><option>Delantero</option></select></div>
       <div class="field"><label for="max-called">Máximo de convocados</label><input id="max-called" type="number" min="1" max="${state.players.length}" value="${state.maxCalled}"></div>
     </div>
     <div class="admin-actions"><button class="primary-button" data-action="save-match">Guardar partido</button><button class="secondary-button" data-action="add-player">Añadir jugador</button></div>
-    <div class="table-wrap" style="margin-top:14px"><table class="manage-table"><thead><tr><th>Jugador</th><th>Dorsal</th><th>Estado</th><th>Goles</th><th>Amarillas</th><th>Rojas</th><th>Pase temporal</th><th>Inmunidad infinita</th></tr></thead><tbody>
-      ${state.players.map(player=>`<tr data-player-id="${player.id}"><td><span class="player-manage-name"><img src="${avatar(player)}" alt="">${escapeHtml(player.name)}</span></td><td><input data-field="dorsal" type="number" min="1" max="99" step="1" value="${player.dorsal}" aria-label="Dorsal de ${escapeHtml(player.name)}"></td><td><select data-field="status"><option value="called" ${player.status==="called"?"selected":""}>Convocado</option><option value="personal" ${player.status==="personal"?"selected":""}>Motivos personales</option><option value="lottery" ${player.status==="lottery"?"selected":""} ${isGoalkeeper(player)?"disabled":""}>Por sorteo</option></select></td><td><input data-field="goals" type="number" min="0" value="${player.goals}"></td><td><input data-field="yellow" type="number" min="0" value="${player.yellow}"></td><td><input data-field="red" type="number" min="0" value="${player.red}"></td><td><input data-field="immunity" type="checkbox" ${player.immunity?"checked":""} aria-label="Pase temporal para ${escapeHtml(player.name)}"></td><td><label class="infinite-toggle" title="${isGoalkeeper(player)?"El portero siempre tiene inmunidad infinita":"Activar o quitar inmunidad infinita"}"><input data-field="infiniteImmunity" type="checkbox" ${hasInfiniteImmunity(player)?"checked":""} ${isGoalkeeper(player)?"disabled":""} aria-label="Inmunidad infinita para ${escapeHtml(player.name)}"><span aria-hidden="true">∞</span></label></td></tr>`).join("")}
+    <div class="table-wrap" style="margin-top:14px"><table class="manage-table"><thead><tr><th>Jugador</th><th>Dorsal</th><th>Estado</th><th>Goles</th><th>Amarillas</th><th>Rojas</th><th>Pase temporal</th><th>Inmunidad infinita</th><th>Acciones</th></tr></thead><tbody>
+      ${state.players.map(player=>`<tr data-player-id="${escapeHtml(player.id)}"><td><span class="player-manage-name"><img src="${avatar(player)}" alt="">${escapeHtml(player.name)}</span></td><td><input data-field="dorsal" type="number" min="1" max="99" step="1" value="${player.dorsal}" aria-label="Dorsal de ${escapeHtml(player.name)}"></td><td><select data-field="status"><option value="called" ${player.status==="called"?"selected":""}>Convocado</option><option value="personal" ${player.status==="personal"?"selected":""}>Motivos personales</option><option value="lottery" ${player.status==="lottery"?"selected":""} ${isGoalkeeper(player)?"disabled":""}>Por sorteo</option></select></td><td><input data-field="goals" type="number" min="0" value="${player.goals}"></td><td><input data-field="yellow" type="number" min="0" value="${player.yellow}"></td><td><input data-field="red" type="number" min="0" value="${player.red}"></td><td><input data-field="immunity" type="checkbox" ${player.immunity?"checked":""} aria-label="Pase temporal para ${escapeHtml(player.name)}"></td><td><label class="infinite-toggle" title="${isGoalkeeper(player)?"El portero siempre tiene inmunidad infinita":"Activar o quitar inmunidad infinita"}"><input data-field="infiniteImmunity" type="checkbox" ${hasInfiniteImmunity(player)?"checked":""} ${isGoalkeeper(player)?"disabled":""} aria-label="Inmunidad infinita para ${escapeHtml(player.name)}"><span aria-hidden="true">∞</span></label></td><td><button class="danger-button" data-action="delete-player" data-player-id="${escapeHtml(player.id)}" aria-label="Eliminar a ${escapeHtml(player.name)}">Eliminar</button></td></tr>`).join("")}
     </tbody></table></div><div class="admin-actions"><button class="primary-button" data-action="save-roster">Guardar plantilla y estadísticas</button></div>
   </section>`;
 }
@@ -463,9 +583,12 @@ function renderAll() {
 function updateAdminControls(render = true) {
   const enabled = Boolean(adminSession && adminSession.authenticated);
   document.body.classList.toggle("admin-mode", enabled);
-  document.querySelector("#admin-label").textContent = enabled ? "Salir del modo administrador" : "Acceso administrador";
+  const adminLabel = enabled ? "Cerrar sesión de administrador" : "Administración";
+  document.querySelector("#admin-label").textContent = adminLabel;
+  document.querySelector("#admin-toggle").setAttribute("aria-label", adminLabel);
+  document.querySelector("#admin-toggle").title = enabled ? "Cerrar sesión" : "Administración";
   document.querySelector("#admin-toggle").classList.toggle("admin-on", enabled);
-  document.querySelector("#mobile-admin").setAttribute("aria-label", enabled ? "Salir del modo administrador" : "Activar modo administrador");
+  document.querySelector("#mobile-admin").setAttribute("aria-label", adminLabel);
   if (!enabled && activePage === "crear-convocatoria") activePage = "inicio";
   if (render && state) renderAll();
 }
@@ -659,17 +782,45 @@ document.addEventListener("click", event => {
   } else if (action.dataset.action === "cancel-match-edit") {
     editingMatchIndex = null;
     renderMatches();
+  } else if (action.dataset.action === "delete-match") {
+    const matchIndex = Number(action.dataset.matchIndex);
+    const match = state.matches[matchIndex];
+    if (!match) return;
+    const opponent = match.home === "Carris FC" ? match.away : match.home;
+    const matchLabel = `jornada ${match.round} · ${match.home} ${match.score} ${match.away}`;
+    if (!window.confirm(`¿Eliminar ${matchLabel}? También se descontarán de las estadísticas acumuladas los goles y tarjetas registrados en este partido. Esta acción no se puede deshacer.`)) return;
+    const wasNextMatch = Number(state.match.round) === Number(match.round) && state.match.opponent === opponent;
+    state.players.forEach(player => {
+      const stats = matchPlayerStats(match, player.id);
+      player.goals = Math.max(0, Number(player.goals || 0) - Number(stats.goals || 0));
+      player.yellow = Math.max(0, Number(player.yellow || 0) - Number(stats.yellow || 0));
+      player.red = Math.max(0, Number(player.red || 0) - Number(stats.red || 0));
+    });
+    state.matches.splice(matchIndex, 1);
+    if (wasNextMatch) {
+      const nextRound = Math.max(
+        1,
+        Number(match.round) + 1,
+        ...state.matches.map(item => Number(item.round) + 1),
+        ...state.callupHistory.map(item => Number(item.round) + 1)
+      );
+      state.match = { round: nextRound, opponent: "", date: "", time: "—", venue: HOME_VENUE };
+    }
+    syncNextMatchFromSchedule();
+    editingMatchIndex = null;
+    saveState(`Jornada ${match.round} eliminada.`);
   } else if (action.dataset.action === "save-existing-match") {
     const matchIndex = Number(action.dataset.matchIndex);
     const match = state.matches[matchIndex];
     const card = action.closest(".fixture-card");
     const round = Number(card.querySelector('[data-match-field="round"]').value);
     const date = card.querySelector('[data-match-field="date"]').value.trim();
+    const time = card.querySelector('[data-match-field="time"]').value.trim();
     const home = card.querySelector('[data-match-field="home"]').value.trim();
     const away = card.querySelector('[data-match-field="away"]').value.trim();
-    const score = card.querySelector('[data-match-field="score"]').value.trim();
-    if (!match || match.score === "—" || !Number.isInteger(round) || round < 1 || !date || !home || !away || !score || score === "—") {
-      showToast("Revisa la jornada, la fecha, los equipos y el resultado.");
+    const score = card.querySelector('[data-match-field="score"]').value.trim() || "—";
+    if (!match || !Number.isInteger(round) || round < 1 || !dateToISO(date) || !home || !away) {
+      showToast("Revisa la jornada, la fecha y los equipos.");
       return;
     }
     if (state.matches.some((other, index) => index !== matchIndex && Number(other.round) === round)) {
@@ -693,6 +844,9 @@ document.addEventListener("click", event => {
       showToast("Los goles y las tarjetas deben ser números enteros iguales o mayores que cero.");
       return;
     }
+    const oldRound = match.round;
+    const oldOpponent = match.home === "Carris FC" ? match.away : match.home;
+    const wasNextMatch = Number(state.match.round) === Number(oldRound) && state.match.opponent === oldOpponent;
     state.players.forEach(player => {
       const previous = matchPlayerStats(match, player.id);
       const next = updatedStats[player.id] || { goals: 0, yellow: 0, red: 0 };
@@ -707,8 +861,18 @@ document.addEventListener("click", event => {
     match.playerStats = updatedStats;
     match.scorers = isRestMatch(match) ? "Jornada de descanso" : matchScorers(match) || "Sin goleadores añadidos";
     match.result = card.querySelector('[data-match-field="result"]').value.trim() || (isRestMatch(match) ? "Esta jornada descansamos." : "Sin detalles adicionales.");
-    match.date = date;
+    match.date = dateToISO(date);
+    match.time = validTime(time);
     match.venue = isRestMatch(match) ? "" : HOME_VENUE;
+    const nextFixture = state.matches
+      .filter(other => other !== match && other.score === "—" && dateToISO(other.date) >= localDateISO())
+      .sort((a, b) => dateToISO(a.date).localeCompare(dateToISO(b.date)) || a.round - b.round)[0];
+    if (wasNextMatch && score !== "—") {
+      if (nextFixture) setNextMatchFromFixture(nextFixture);
+      else state.match = { round: nextRoundNumber(), opponent: "", date: "", time: "—", venue: HOME_VENUE };
+    } else {
+      syncNextMatchFromSchedule();
+    }
     editingMatchIndex = null;
     saveState(`Jornada ${round} actualizada.`);
   } else if (action.dataset.action === "save-teams") {
@@ -744,8 +908,8 @@ document.addEventListener("click", event => {
     const opponent = document.querySelector("#new-match-opponent").value;
     const location = document.querySelector("#new-match-location").value;
     const isRest = opponent === "Descanso";
-    if (!Number.isInteger(round) || round < 1 || !date || !opponent || (!isRest && !time)) {
-      showToast("Indica una jornada y fecha; los partidos también necesitan una hora.");
+    if (!Number.isInteger(round) || round < 1 || !dateToISO(date) || !opponent || (!isRest && !validTime(time))) {
+      showToast("Indica una jornada y fecha; los partidos también necesitan una hora válida.");
       return;
     }
     if (state.matches.some(match => Number(match.round) === round)) {
@@ -754,7 +918,8 @@ document.addEventListener("click", event => {
     }
     const fixture = {
       round,
-      date: `${date}${isRest || !time ? "" : ` · ${time}`}`,
+      date: dateToISO(date),
+      time: isRest ? "" : validTime(time),
       home: isRest || location === "local" ? "Carris FC" : opponent,
       away: isRest ? "Descanso" : location === "local" ? opponent : "Carris FC",
       score: "—",
@@ -764,41 +929,51 @@ document.addEventListener("click", event => {
       playerStats: {}
     };
     state.matches.push(fixture);
-    if (!state.matches.some(match => match !== fixture && match.score === "—" && Number(match.round) < round)) {
-      state.match = {
-        round,
-        opponent,
-        date,
-        time: isRest ? "—" : time,
-        venue: HOME_VENUE
-      };
-    }
+    syncNextMatchFromSchedule();
     saveState(isRest ? `Jornada ${round} de descanso añadida.` : `Partido de la jornada ${round} añadido.`);
   } else if (action.dataset.action === "save-match") {
     const opponent = document.querySelector("#edit-opponent").value.trim();
     if (!opponent) { showToast("Escribe el nombre del equipo rival."); return; }
-    const round = state.match.round || 8;
+    const round = Number(state.match.round) || nextRoundNumber();
     const isRest = opponent === "Descanso";
     state.match = {
       round,
       opponent,
-      date: document.querySelector("#edit-date").value.trim() || "Fecha por confirmar",
-      time: isRest ? "—" : document.querySelector("#edit-time").value.trim() || "Hora por confirmar",
+      date: dateToISO(document.querySelector("#edit-date").value),
+      time: isRest ? "—" : validTime(document.querySelector("#edit-time").value) || "—",
       venue: HOME_VENUE
     };
-    const upcoming = state.matches.find(match => match.score === "—");
-    if (upcoming) {
-      upcoming.round = round;
-      upcoming.home = "Carris FC";
-      upcoming.away = opponent;
-      upcoming.date = isRest ? state.match.date : `${state.match.date} · ${state.match.time}`;
-      upcoming.scorers = isRest ? "Jornada de descanso" : "Por jugar";
-      upcoming.result = isRest ? "Esta jornada descansamos." : "¡Te esperamos!";
-      upcoming.venue = isRest ? "" : HOME_VENUE;
+    const matchingFixture = state.matches.find(match =>
+      Number(match.round) === round && match.score === "—" &&
+      (match.home === opponent || match.away === opponent));
+    if (matchingFixture) {
+      matchingFixture.date = state.match.date;
+      matchingFixture.time = state.match.time === "—" ? "" : state.match.time;
     }
+    syncNextMatchFromSchedule();
     const maxCalled = Number(document.querySelector("#max-called").value);
     if (Number.isInteger(maxCalled) && maxCalled > 0) state.maxCalled = maxCalled;
     saveState("Datos del próximo partido guardados.");
+  } else if (action.dataset.action === "delete-player") {
+    const playerId = String(action.dataset.playerId);
+    const player = state.players.find(item => String(item.id) === playerId);
+    if (!player) return;
+    if (!window.confirm(`¿Eliminar a ${player.name} de la plantilla? También se borrarán sus estadísticas individuales, sus datos del historial de convocatorias y sus goles/tarjetas registrados por jornada. Los resultados de los partidos se conservarán. Esta acción no se puede deshacer.`)) return;
+    state.players = state.players.filter(item => String(item.id) !== playerId);
+    state.callup.availableIds = state.callup.availableIds.filter(id => String(id) !== playerId);
+    state.callup.fixedIds = [];
+    state.callup.entrantIds = [];
+    state.callup.excludedIds = [];
+    state.callup.created = false;
+    state.callup.completed = false;
+    state.matches.forEach(match => {
+      if (Object.prototype.hasOwnProperty.call(match.playerStats, playerId)) {
+        delete match.playerStats[playerId];
+        match.scorers = matchScorers(match) || "Sin goleadores añadidos";
+      }
+    });
+    state.callupHistory.forEach(entry => { delete entry.statuses[playerId]; });
+    saveState(`${player.name} eliminado de la plantilla.`);
   } else if (action.dataset.action === "add-player") {
     const input = document.querySelector("#new-player");
     const name = input.value.trim();

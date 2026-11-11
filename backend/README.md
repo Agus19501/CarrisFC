@@ -24,3 +24,5 @@ No subas `.env` ni pegues secretos en el código. En Render, configura las varia
 - `POST /api/auth/login` y `POST /api/auth/logout`: inicio y cierre de sesión.
 - `GET /api/state`: estado público del club; crea el estado inicial vacío si todavía no existe.
 - `PUT /api/state`: escritura autenticada y validada del estado completo.
+
+Las fechas de partidos se envían como `YYYY-MM-DD` y las horas en un campo separado (`HH:mm`). La web convierte automáticamente las fechas antiguas reconocibles al nuevo formato.

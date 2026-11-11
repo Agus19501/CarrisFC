@@ -24,6 +24,21 @@ function count(value, field, max = 100000) {
   return value;
 }
 
+function dateOnly(value, field, allowEmpty = false) {
+  const result = text(value, field, 10, allowEmpty);
+  if (!result && allowEmpty) return result;
+  const match = result.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) throw invalid(`${field} debe tener una fecha válida.`);
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  if (parsed.getUTCFullYear() !== year || parsed.getUTCMonth() !== month - 1 || parsed.getUTCDate() !== day) {
+    throw invalid(`${field} debe tener una fecha válida.`);
+  }
+  return result;
+}
+
 function identifier(value, field) {
   if ((typeof value !== "string" && typeof value !== "number") ||
     !String(value).trim() || String(value).length > 64) {
@@ -94,7 +109,7 @@ function validateState(input) {
   const match = {
     round: input.match.round,
     opponent: text(input.match.opponent, "Rival", 80, true),
-    date: text(input.match.date, "Fecha", 100, true),
+    date: dateOnly(input.match.date, "Fecha", true),
     time: text(input.match.time, "Hora", 40, true),
     venue: HOME_VENUE
   };
@@ -122,7 +137,8 @@ function validateState(input) {
     const isRest = item.home === "Descanso" || item.away === "Descanso";
     return {
       round: item.round,
-      date: text(item.date, `${field}: fecha`, 100, true),
+      date: dateOnly(item.date, `${field}: fecha`, true),
+      time: item.time === undefined ? "" : text(item.time, `${field}: hora`, 40, true),
       home: text(item.home, `${field}: equipo local`, 80),
       away: text(item.away, `${field}: equipo visitante`, 80),
       score: text(item.score, `${field}: resultado`, 30),
