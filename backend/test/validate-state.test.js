@@ -19,6 +19,20 @@ test("rejects duplicated player dorsals", () => {
   assert.throws(() => validateState(input), /dorsales deben ser únicos/);
 });
 
+test("keeps infinite immunity reflected in the temporary pass", () => {
+  const input = createEmptyState();
+  input.players = [
+    { id: 1, dorsal: 1, name: "Portero", position: "Portero", goals: 0, yellow: 0, red: 0, status: "called", immunity: false, infiniteImmunity: false, color: "#123456" },
+    { id: 2, dorsal: 2, name: "Inmune", position: "Defensa", goals: 0, yellow: 0, red: 0, status: "called", immunity: false, infiniteImmunity: true, color: "#654321" }
+  ];
+
+  const state = validateState(input);
+  assert.equal(state.players[0].infiniteImmunity, true);
+  assert.equal(state.players[0].immunity, true);
+  assert.equal(state.players[1].infiniteImmunity, true);
+  assert.equal(state.players[1].immunity, true);
+});
+
 test("stores match dates as calendar dates with a separate kick-off time", () => {
   const input = createEmptyState();
   input.matches.push({
@@ -35,6 +49,12 @@ test("stores match dates as calendar dates with a separate kick-off time", () =>
   const state = validateState(input);
   assert.equal(state.matches[0].date, "2026-11-15");
   assert.equal(state.matches[0].time, "10:30");
+
+  input.matches[0].date = "";
+  input.matches[0].time = "";
+  const unscheduledState = validateState(input);
+  assert.equal(unscheduledState.matches[0].date, "");
+  assert.equal(unscheduledState.matches[0].time, "");
 
   input.matches[0].date = "2026-02-31";
   assert.throws(() => validateState(input), /fecha válida/);

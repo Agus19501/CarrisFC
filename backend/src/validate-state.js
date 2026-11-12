@@ -88,6 +88,7 @@ function validateState(input) {
     }
     playerIds.add(idKey);
     dorsals.add(dorsal);
+    const infiniteImmunity = player.infiniteImmunity || player.position === "Portero";
     return {
       id,
       dorsal,
@@ -97,8 +98,8 @@ function validateState(input) {
       yellow: count(player.yellow, `${field}: amarillas`),
       red: count(player.red, `${field}: rojas`),
       status: player.status,
-      immunity: player.immunity,
-      infiniteImmunity: player.infiniteImmunity,
+      immunity: player.immunity || infiniteImmunity,
+      infiniteImmunity,
       color: player.color
     };
   });

@@ -74,6 +74,15 @@ function nextRoundNumber(targetState = state) {
   return Math.max(Number(targetState.match.round) || 1, latestMatchRound + 1, latestHistoryRound + 1);
 }
 
+function compareMatchesBySchedule(a, b) {
+  const dateA = dateToISO(a.date);
+  const dateB = dateToISO(b.date);
+  if (dateA && dateB) return dateA.localeCompare(dateB) || a.round - b.round;
+  if (dateA) return -1;
+  if (dateB) return 1;
+  return a.round - b.round;
+}
+
 function setNextMatchFromFixture(match, targetState = state) {
   const opponent = match.home === "Carris FC" ? match.away : match.home;
   targetState.match = {
@@ -88,8 +97,9 @@ function setNextMatchFromFixture(match, targetState = state) {
 function syncNextMatchFromSchedule(targetState = state) {
   const today = localDateISO();
   const nextFixture = targetState.matches
-    .filter(match => match.score === "—" && dateToISO(match.date) >= today)
-    .sort((a, b) => dateToISO(a.date).localeCompare(dateToISO(b.date)) || a.round - b.round)[0];
+    .filter(match => match.score === "—" && (!dateToISO(match.date) || dateToISO(match.date) >= today))
+    .slice()
+    .sort(compareMatchesBySchedule)[0];
   const currentDate = dateToISO(targetState.match.date);
   if (nextFixture && (!currentDate || currentDate < today || dateToISO(nextFixture.date) <= currentDate)) {
     setNextMatchFromFixture(nextFixture, targetState);
@@ -371,11 +381,11 @@ function fixtureCreatePanel() {
   return `
     <section class="card fixture-create-panel">
       <h2>Añadir partido</h2>
-      <p>Selecciona la fecha del calendario. Las jornadas pasadas no reemplazan el próximo partido.</p>
+      <p>Rival y jornada son suficientes; puedes añadir la fecha y la hora más adelante.</p>
       <div class="edit-fields">
         <div class="field"><label for="new-match-round">Jornada</label><input id="new-match-round" type="number" min="1" value="${nextRoundNumber()}"></div>
-        <div class="field"><label for="new-match-date">Fecha</label><input id="new-match-date" type="date" required></div>
-        <div class="field" data-regular-match-field><label for="new-match-time">Hora</label><input id="new-match-time" type="time" required></div>
+        <div class="field"><label for="new-match-date">Fecha (opcional)</label><input id="new-match-date" type="date"></div>
+        <div class="field" data-regular-match-field><label for="new-match-time">Hora (opcional)</label><input id="new-match-time" type="time"></div>
         <div class="field"><label for="new-match-opponent">Rival</label><select id="new-match-opponent">${teams.filter(team => team !== "Carris FC").map(team => `<option value="${escapeHtml(team)}">${escapeHtml(team === "Descanso" ? "Descanso de liga" : team)}</option>`).join("")}</select></div>
         <div class="field" data-regular-match-field><label for="new-match-location">¿Dónde jugamos?</label><select id="new-match-location"><option value="local">En casa</option><option value="visitante">Como visitantes</option></select></div>
         <p class="fixed-venue-note" data-regular-match-field>Todos los partidos se juegan en <strong>${HOME_VENUE}</strong>.</p>
@@ -390,20 +400,17 @@ function renderMatches() {
     .filter(match => matchFilter === "todos" ||
       (matchFilter === "jugados" ? match.score !== "—" : match.score === "—"))
     .slice()
-    .sort((a, b) => {
-      const dateOrder = dateToISO(a.date).localeCompare(dateToISO(b.date));
-      return dateOrder || a.round - b.round;
-    });
+    .sort(compareMatchesBySchedule);
   document.querySelector("#page-partidos").innerHTML = `
     ${adminBanner()}
     <div class="page-heading"><div><div class="eyebrow">EL CAMINO DEL EQUIPO</div><h1 id="matches-title">Partidos</h1><p>Gestiona jornadas, resultados y convocatorias pasadas desde cada partido.</p></div><span class="count-pill">${state.matches.length} jornadas</span></div>
     ${activePage === "partidos" && isAdmin ? fixtureCreatePanel() : ""}
-    <div class="filter-row match-filter-row">${[["todos","Todos"],["jugados","Jugados"],["pendientes","Pendientes"]].map(([value,label])=>`<button class="filter-chip ${matchFilter===value?"active":""}" data-filter="${value}">${label}</button>`).join("")}</div>
+    <div class="filter-row match-filter-row">${[["todos","Todos"],["jugados","Jugados"],["pendientes","Próximos"]].map(([value,label])=>`<button class="filter-chip ${matchFilter===value?"active":""}" data-filter="${value}">${label}</button>`).join("")}</div>
     <div class="fixture-list">${matches.map(match => {
       const matchIndex = state.matches.indexOf(match);
       const hasResult = match.score !== "—";
       const date = dateToISO(match.date);
-      const isUpcoming = hasResult === false && date !== "" && date >= localDateISO();
+      const isUpcoming = hasResult === false && (!date || date >= localDateISO());
       const isRest = isRestMatch(match);
       const scorers = matchScorers(match) || match.scorers || "Sin goleadores añadidos";
       const callupEntry = state.callupHistory.find(entry => Number(entry.round) === Number(match.round));
@@ -412,8 +419,8 @@ function renderMatches() {
         <div class="match-edit-form">
           <div class="edit-fields">
             <div class="field"><label>Jornada</label><input data-match-field="round" type="number" min="1" value="${match.round}"></div>
-            <div class="field"><label>Fecha</label><input data-match-field="date" type="date" value="${escapeHtml(date)}"></div>
-            <div class="field"><label>Hora</label><input data-match-field="time" type="time" value="${escapeHtml(validTime(match.time) || timeFromLegacyDate(match.date))}"></div>
+            <div class="field"><label>Fecha (opcional)</label><input data-match-field="date" type="date" value="${escapeHtml(date)}"></div>
+            <div class="field" ${isRest ? "hidden" : ""}><label>Hora (opcional)</label><input data-match-field="time" type="time" value="${escapeHtml(validTime(match.time) || timeFromLegacyDate(match.date))}"></div>
             <div class="field"><label>Equipo local</label><input data-match-field="home" value="${escapeHtml(match.home)}"></div>
             <div class="field"><label>Equipo visitante</label><input data-match-field="away" value="${escapeHtml(match.away)}"></div>
             <div class="field"><label>Resultado (goles local-visitante)</label><input data-match-field="score" value="${escapeHtml(match.score)}" placeholder="Ej.: 2-1"></div>
@@ -446,7 +453,7 @@ function renderMatches() {
                     <option value="lottery" ${status === "lottery" ? "selected" : ""} ${isGoalkeeper(player) ? "disabled" : ""}>Desconvocado por sorteo</option>
                     <option value="personal" ${status === "personal" ? "selected" : ""}>Motivos personales</option>
                   </select></td>
-                  <td><label class="callup-immunity-toggle"><input data-callup-immunity type="checkbox" ${player.immunity ? "checked" : ""} ${hasInfinitePass ? "disabled" : ""}><span>${hasInfinitePass ? "Inmunidad permanente" : "Pase temporal"}</span></label></td>
+                  <td><label class="callup-immunity-toggle"><input data-callup-immunity type="checkbox" ${player.immunity || hasInfinitePass ? "checked" : ""} ${hasInfinitePass ? "disabled" : ""}><span>${hasInfinitePass ? "Inmunidad permanente" : "Pase temporal"}</span></label></td>
                 </tr>`;
               }).join("")}</tbody>
             </table>
@@ -454,14 +461,13 @@ function renderMatches() {
           <div class="admin-actions"><button class="primary-button" data-action="save-match-callup" data-match-round="${match.round}">Guardar convocatoria</button><button class="secondary-button" data-action="cancel-callup-edit">Cancelar</button></div>
         </div>` : "";
       const displayDate = formatMatchDate(match) || "Fecha por confirmar";
-      const status = hasResult ? "Jugado" : isUpcoming ? "Próximo partido" : "Pendiente de resultado";
+      const status = isRest ? "Jornada de descanso" : hasResult ? "Jugado" : isUpcoming ? "Próximo partido" : "Sin resultado";
+      const fixtureMain = isRest
+        ? `<span class="rest-fixture-label">JORNADA DE DESCANSO</span>`
+        : `<span class="fixture-round">JORNADA ${match.round}<small>${status}</small></span><span class="fixture-teams"><span>${escapeHtml(match.home)}</span><span class="fixture-score ${hasResult?"":"fixture-upcoming"}">${escapeHtml(match.score)}</span><span>${escapeHtml(match.away)}</span></span><span class="fixture-date">${escapeHtml(formatMatchDate(match) || "Fecha por confirmar")}</span>`;
       return `<article class="fixture-card">
-        <button class="fixture-main fixture-toggle" type="button" data-fixture aria-expanded="false">
-          <span class="fixture-round">JORNADA ${match.round}<small>${status}</small></span>
-          ${isRest ? `<span class="fixture-teams rest-fixture"><span>Carris FC</span><span class="rest-pill">DESCANSO</span></span>` : `<span class="fixture-teams"><span>${escapeHtml(match.home)}</span><span class="fixture-score ${hasResult?"":"fixture-upcoming"}">${escapeHtml(match.score)}</span><span>${escapeHtml(match.away)}</span></span>`}
-          <span class="fixture-date">${escapeHtml(displayDate)}</span>
-        </button>
-        <div class="fixture-detail">${isRest ? `<strong>Esta jornada descansamos.</strong><br>${escapeHtml(displayDate)}` : hasResult ? `<strong>Goleadores: </strong>${escapeHtml(scorers)}<br><strong>Amarillas: </strong>${escapeHtml(matchCards(match, "yellow"))} · <strong>Rojas: </strong>${escapeHtml(matchCards(match, "red"))}<br><strong>Estadio: </strong>${HOME_VENUE}` : `<strong>${isUpcoming ? "Próximo encuentro" : "Pendiente de resultado"}</strong><br>${escapeHtml(displayDate)} · ${HOME_VENUE}`}<br>${escapeHtml(match.result || "")}</div>
+        <button class="fixture-main fixture-toggle ${isRest ? "rest-fixture-main" : ""}" type="button" data-fixture aria-expanded="false">${fixtureMain}</button>
+        <div class="fixture-detail">${isRest ? `<strong>JORNADA DE DESCANSO</strong>` : hasResult ? `<strong>Goleadores: </strong>${escapeHtml(scorers)}<br><strong>Amarillas: </strong>${escapeHtml(matchCards(match, "yellow"))} · <strong>Rojas: </strong>${escapeHtml(matchCards(match, "red"))}<br><strong>Estadio: </strong>${HOME_VENUE}` : `<strong>${isUpcoming ? "Próximo encuentro" : "Sin resultado"}</strong><br>${escapeHtml(displayDate)}${match.date && !isRest ? ` · ${HOME_VENUE}` : ""}`}<br>${escapeHtml(match.result || "")}</div>
         ${isAdmin ? `<div class="fixture-actions"><span class="fixture-admin-status">${status}</span><div class="fixture-action-buttons"><button class="secondary-button match-edit-button" data-action="edit-match" data-match-index="${matchIndex}">${hasResult ? "Editar resultado" : isUpcoming ? "Editar partido" : "Registrar resultado"}</button>${canEditCallup ? `<button class="secondary-button match-edit-button" data-action="edit-match-callup" data-match-round="${match.round}">${callupEntry ? "Editar convocatoria" : "Registrar convocatoria"}</button>` : ""}<button class="danger-button" data-action="delete-match" data-match-index="${matchIndex}" aria-label="Eliminar jornada ${match.round}">Eliminar</button></div></div>` : ""}
         ${editor}
         ${callupEditor}
@@ -485,16 +491,16 @@ function renderCalls() {
     <div class="page-heading"><div><div class="eyebrow">LA LISTA DE CADA JORNADA</div><h1 id="calls-title">Desconvocados y ausencias</h1><p>Convocados, desconvocados por sorteo y ausencias personales.</p></div><span class="count-pill">Jornada ${state.match.round || 8}</span></div>
     <div class="call-summary"><div class="card summary-box"><strong>${called.length}</strong><span>Convocados</span></div><div class="card summary-box"><strong>${lottery.length}</strong><span>Desconvocados por sorteo</span></div><div class="card summary-box"><strong>${personal.length}</strong><span>Ausencias personales</span></div></div>
     ${groups.map(group=>`<section class="card availability-group"><div class="availability-title"><i class="status-dot ${group.kind}"></i>${group.title}<span class="count-pill">${group.players.length}</span></div><div class="availability-list">${group.players.length?group.players.map((player,index)=>`<div class="availability-person"><img src="${avatar(player,index)}" alt="Retrato de ${escapeHtml(player.name)}"><div><strong>${playerDorsal(player)} ${escapeHtml(player.name)}</strong><small>${escapeHtml(group.note)}${player.immunity&&group.kind==="lottery"?" · ✳ Inmune al siguiente sorteo":""}</small></div></div>`).join(""):`<div class="empty-state" style="grid-column:1/-1">No hay jugadores en esta categoría.</div>`}</div></section>`).join("")}
-    <section class="card" style="padding:17px 18px"><div class="card-title"><span class="title-mark">✳</span><h2>¿Cómo funciona el pase de inmunidad?</h2></div><p style="margin:10px 0 0 35px;color:#7a867d;font-size:10px;line-height:1.7">Quien queda fuera por sorteo recibe inmunidad para el siguiente sorteo: no podrá volver a salir elegido en esa ocasión. La inmunidad no se aplica a las ausencias por motivos personales.</p></section>
+    <section class="card" style="padding:17px 18px"><div class="card-title"><span class="title-mark">✳</span><h2>¿Cómo funciona el pase de inmunidad?</h2></div><p style="margin:10px 0 0 35px;color:#7a867d;font-size:10px;line-height:1.7">Quien queda fuera por sorteo recibe un pase temporal y no vuelve a entrar mientras haya suficientes jugadores sin pase. Si hacen falta más desconvocatorias, se sortea primero entre quienes ya tienen pase, protegiendo a los que aún no habían quedado fuera cuando sea posible. Si todos tienen pase, se reinician los temporales. La inmunidad infinita nunca se pierde y las ausencias personales no cambian los pases.</p></section>
   `;
 }
 
 function renderCallupHistory() {
   const history = state.callupHistory.slice().sort((a, b) => Number(a.round) - Number(b.round));
   const upcomingMatches = state.matches
-    .filter(match => match.score === "—" && dateToISO(match.date) >= localDateISO() && !isRestMatch(match))
+    .filter(match => match.score === "—" && (!dateToISO(match.date) || dateToISO(match.date) >= localDateISO()) && !isRestMatch(match))
     .slice()
-    .sort((a, b) => dateToISO(a.date).localeCompare(dateToISO(b.date)) || a.round - b.round);
+    .sort(compareMatchesBySchedule);
   const scheduledRounds = new Map();
   history.forEach(entry => {
     scheduledRounds.set(Number(entry.round), { entry, date: dateToISO(entry.date) });
@@ -509,12 +515,15 @@ function renderCallupHistory() {
   });
   const matchDate = dateToISO(state.match.date);
   const hasStandaloneNextMatch = Boolean(state.match.opponent && state.match.opponent !== "Descanso" &&
-    matchDate >= localDateISO() && !scheduledRounds.has(Number(state.match.round)));
+    (!matchDate || matchDate >= localDateISO()) && !scheduledRounds.has(Number(state.match.round)));
   if (hasStandaloneNextMatch) {
     scheduledRounds.set(Number(state.match.round), { entry: null, date: matchDate });
   }
-  const currentRound = upcomingMatches.length
-    ? Number(upcomingMatches[0].round)
+  const scheduledCurrentMatch = upcomingMatches.find(match => Number(match.round) === Number(state.match.round));
+  const currentRound = scheduledCurrentMatch
+    ? Number(scheduledCurrentMatch.round)
+    : upcomingMatches.length
+      ? Number(upcomingMatches[0].round)
     : hasStandaloneNextMatch ? Number(state.match.round) : null;
   const rounds = Array.from(scheduledRounds.keys()).filter(Number.isInteger).sort((a, b) => a - b);
   const statusNames = { called: "Convocado", personal: "Motivos personales", lottery: "Desconvocado por sorteo" };
@@ -590,7 +599,7 @@ function renderCreateCallup() {
     ${state.callup.created ? `
       <div class="callup-summary">
         <div class="card summary-box"><strong>${selectedCount}</strong><span>Disponibles</span></div>
-        <div class="card summary-box"><strong>${fixedPlayers.length}</strong><span>${state.callup.completed?"Convocados":"Fijos por inmunidad"}</span></div>
+        <div class="card summary-box"><strong>${fixedPlayers.length}</strong><span>${state.callup.completed?"Convocados":"Protegidos inicialmente"}</span></div>
         <div class="card summary-box"><strong>${state.callup.completed?excludedPlayers.length:required}</strong><span>${state.callup.completed?"Desconvocados":"Plazas a sortear"}</span></div>
       </div>
       ${state.callup.completed ? `
@@ -600,27 +609,27 @@ function renderCreateCallup() {
           <div class="availability-list">${excludedPlayers.map((player,index)=>`<div class="availability-person"><img src="${avatar(player,index)}" alt=""><div><strong>${playerDorsal(player)} ${escapeHtml(player.name)}</strong><small>✳ Inmune al siguiente sorteo</small></div></div>`).join("") || `<div class="empty-state">No hubo desconvocados por sorteo.</div>`}</div></section>
       ` : `
         <section class="card callup-result"><div class="card-header"><div class="card-title"><span class="title-mark">✳</span><h2>Antes del sorteo</h2></div><span class="count-pill">${required} ${required===1?"plaza":"plazas"} por cubrir</span></div>
-          <p class="callup-explainer">Los jugadores con inmunidad temporal o infinita y el portero quedan fijos. La temporal se consume al convocar; la infinita permanece. El resto entra en el sorteo y quien quede desconvocado recibe inmunidad para la siguiente jornada.</p>
+          <p class="callup-explainer">Los jugadores con pase temporal no entran mientras haya suficientes jugadores sin pase. Si hacen falta más desconvocatorias, los jugadores sin pase quedan protegidos cuando sea posible y se sortea entre quienes ya tenían pase. Si todos tienen pase, se reinician los temporales; la inmunidad infinita nunca se pierde.</p>
         </section>
-        <section class="card callup-result"><div class="availability-title"><i class="status-dot called"></i>FIJOS POR INMUNIDAD<span class="count-pill">${fixedPlayers.length}</span></div>
+        <section class="card callup-result"><div class="availability-title"><i class="status-dot called"></i>PROTEGIDOS ANTES DEL SORTEO<span class="count-pill">${fixedPlayers.length}</span></div>
           <div class="availability-list">${fixedPlayers.map((player,index)=>`<div class="availability-person"><img src="${avatar(player,index)}" alt=""><div><strong>${playerDorsal(player)} ${escapeHtml(player.name)}</strong><small>Protegido de este sorteo</small></div></div>`).join("") || `<div class="empty-state">Ningún jugador tiene inmunidad esta jornada.</div>`}</div></section>
-        <section class="card callup-result"><div class="availability-title"><i class="status-dot lottery"></i>ENTRAN EN EL SORTEO<span class="count-pill">${entrantPlayers.length}</span></div>
-          <div class="availability-list">${entrantPlayers.map((player,index)=>`<div class="availability-person"><img src="${avatar(player,index)}" alt=""><div><strong>${playerDorsal(player)} ${escapeHtml(player.name)}</strong><small>Elegible para ser desconvocado</small></div></div>`).join("") || `<div class="empty-state">No hay jugadores que entren en el sorteo.</div>`}</div></section>
+        <section class="card callup-result"><div class="availability-title"><i class="status-dot lottery"></i>SIN PASE TEMPORAL<span class="count-pill">${entrantPlayers.length}</span></div>
+          <div class="availability-list">${entrantPlayers.map((player,index)=>`<div class="availability-person"><img src="${avatar(player,index)}" alt=""><div><strong>${playerDorsal(player)} ${escapeHtml(player.name)}</strong><small>Entran primero en el sorteo</small></div></div>`).join("") || `<div class="empty-state">${required ? "No hay jugadores sin pase: el sorteo reiniciará los pases temporales si hace falta." : "No hacen falta desconvocatorias esta jornada."}</div>`}</div></section>
         <div class="admin-actions"><button class="primary-button" data-action="draw-callup-lottery">${required?"Realizar sorteo · "+required+" desconvocatorias":"Confirmar convocatoria"}</button></div>
       `}` : ""}
   `;
 }
 
 function adminPanel() {
-  return `<section class="card admin-panel"><h2>Gestión de plantilla</h2><p>Administra los jugadores, sus estadísticas y sus inmunidades. El rival, la fecha y la hora se gestionan desde Partidos.</p><p class="immunity-help">El portero es siempre fijo. La inmunidad temporal dura una jornada; la infinita mantiene al jugador fuera del sorteo hasta que la desactives.</p>
+  return `<section class="card admin-panel"><h2>Gestión de plantilla</h2><p>Administra jugadores, posiciones, estadísticas e inmunidades. El rival, la fecha y la hora se gestionan desde Partidos.</p><p class="immunity-help">El pase temporal protege del sorteo mientras haya suficientes jugadores sin pase. Si no alcanza para cubrir las plazas, se reinician los pases temporales y se sortea entre quienes ya habían sido desconvocados. La inmunidad infinita nunca se pierde.</p>
     <div class="edit-fields">
       <div class="field"><label for="new-player">Añadir jugador</label><input id="new-player" placeholder="Nombre y apellidos"></div>
       <div class="field"><label for="new-position">Posición</label><select id="new-position"><option>Portero</option><option>Defensa</option><option>Centrocampista</option><option>Delantero</option></select></div>
       <div class="field"><label for="max-called">Máximo de convocados</label><input id="max-called" type="number" min="1" max="99" value="${state.maxCalled}"></div>
     </div>
     <div class="admin-actions"><button class="primary-button" data-action="add-player">Añadir jugador</button><button class="secondary-button" data-action="save-roster-settings">Guardar máximo de convocados</button></div>
-    <div class="table-wrap" style="margin-top:14px"><table class="manage-table"><thead><tr><th>Jugador</th><th>Dorsal</th><th>Estado</th><th>Goles</th><th>Amarillas</th><th>Rojas</th><th>Pase temporal</th><th>Inmunidad infinita</th><th>Acciones</th></tr></thead><tbody>
-      ${state.players.map(player=>`<tr data-player-id="${escapeHtml(player.id)}"><td><span class="player-manage-name"><img src="${avatar(player)}" alt="">${escapeHtml(player.name)}</span></td><td><input data-field="dorsal" type="number" min="1" max="99" step="1" value="${player.dorsal}" aria-label="Dorsal de ${escapeHtml(player.name)}"></td><td><select data-field="status"><option value="called" ${player.status==="called"?"selected":""}>Convocado</option><option value="personal" ${player.status==="personal"?"selected":""}>Motivos personales</option><option value="lottery" ${player.status==="lottery"?"selected":""} ${isGoalkeeper(player)?"disabled":""}>Por sorteo</option></select></td><td><input data-field="goals" type="number" min="0" value="${player.goals}"></td><td><input data-field="yellow" type="number" min="0" value="${player.yellow}"></td><td><input data-field="red" type="number" min="0" value="${player.red}"></td><td><input data-field="immunity" type="checkbox" ${player.immunity?"checked":""} aria-label="Pase temporal para ${escapeHtml(player.name)}"></td><td><label class="infinite-toggle" title="${isGoalkeeper(player)?"El portero siempre tiene inmunidad infinita":"Activar o quitar inmunidad infinita"}"><input data-field="infiniteImmunity" type="checkbox" ${hasInfiniteImmunity(player)?"checked":""} ${isGoalkeeper(player)?"disabled":""} aria-label="Inmunidad infinita para ${escapeHtml(player.name)}"><span aria-hidden="true">∞</span></label></td><td><button class="danger-button" data-action="delete-player" data-player-id="${escapeHtml(player.id)}" aria-label="Eliminar a ${escapeHtml(player.name)}">Eliminar</button></td></tr>`).join("")}
+    <div class="table-wrap" style="margin-top:14px"><table class="manage-table"><thead><tr><th>Jugador</th><th>Dorsal</th><th>Posición</th><th>Estado</th><th>Goles</th><th>Amarillas</th><th>Rojas</th><th>Pase temporal</th><th>Inmunidad infinita</th><th>Acciones</th></tr></thead><tbody>
+      ${state.players.map(player=>`<tr data-player-id="${escapeHtml(player.id)}"><td><span class="player-manage-name"><img src="${avatar(player)}" alt="">${escapeHtml(player.name)}</span></td><td><input data-field="dorsal" type="number" min="1" max="99" step="1" value="${player.dorsal}" aria-label="Dorsal de ${escapeHtml(player.name)}"></td><td><select data-field="position" aria-label="Posición de ${escapeHtml(player.name)}">${["Portero","Defensa","Centrocampista","Delantero"].map(position=>`<option value="${position}" ${player.position===position?"selected":""}>${position}</option>`).join("")}</select></td><td><select data-field="status"><option value="called" ${player.status==="called"?"selected":""}>Convocado</option><option value="personal" ${player.status==="personal"?"selected":""}>Motivos personales</option><option value="lottery" ${player.status==="lottery"?"selected":""} ${isGoalkeeper(player)?"disabled":""}>Por sorteo</option></select></td><td><input data-field="goals" type="number" min="0" value="${player.goals}"></td><td><input data-field="yellow" type="number" min="0" value="${player.yellow}"></td><td><input data-field="red" type="number" min="0" value="${player.red}"></td><td><input data-field="immunity" type="checkbox" ${player.immunity || hasInfiniteImmunity(player)?"checked":""} ${hasInfiniteImmunity(player)?"disabled":""} aria-label="Pase temporal para ${escapeHtml(player.name)}"></td><td><label class="infinite-toggle" title="${isGoalkeeper(player)?"El portero siempre tiene inmunidad infinita":"Activar o quitar inmunidad infinita"}"><input data-field="infiniteImmunity" type="checkbox" ${hasInfiniteImmunity(player)?"checked":""} ${isGoalkeeper(player)?"disabled":""} aria-label="Inmunidad infinita para ${escapeHtml(player.name)}"><span aria-hidden="true">∞</span></label></td><td><button class="danger-button" data-action="delete-player" data-player-id="${escapeHtml(player.id)}" aria-label="Eliminar a ${escapeHtml(player.name)}">Eliminar</button></td></tr>`).join("")}
     </tbody></table></div><div class="admin-actions"><button class="primary-button" data-action="save-roster">Guardar plantilla y estadísticas</button></div>
   </section>`;
 }
@@ -642,12 +651,13 @@ function renderAll() {
 function updateAdminControls(render = true) {
   const enabled = Boolean(adminSession && adminSession.authenticated);
   document.body.classList.toggle("admin-mode", enabled);
-  const adminLabel = enabled ? "Cerrar sesión de administrador" : "Administración";
+  const adminLabel = enabled ? "Cerrar sesión" : "Iniciar sesión";
   document.querySelector("#admin-label").textContent = adminLabel;
-  document.querySelector("#admin-toggle").setAttribute("aria-label", adminLabel);
-  document.querySelector("#admin-toggle").title = enabled ? "Cerrar sesión" : "Administración";
+  document.querySelector("#admin-toggle").setAttribute("aria-label", enabled ? "Cerrar sesión de administrador" : "Iniciar sesión como administrador");
+  document.querySelector("#admin-toggle").title = adminLabel;
   document.querySelector("#admin-toggle").classList.toggle("admin-on", enabled);
-  document.querySelector("#mobile-admin").setAttribute("aria-label", adminLabel);
+  document.querySelector("#mobile-admin").textContent = enabled ? "Salir" : "Admin";
+  document.querySelector("#mobile-admin").setAttribute("aria-label", enabled ? "Cerrar sesión de administrador" : "Iniciar sesión como administrador");
   if (!enabled && activePage === "crear-convocatoria") activePage = "inicio";
   if (render && state) renderAll();
 }
@@ -745,8 +755,9 @@ function createCallup() {
   const protectedPlayers = available.filter(hasAnyImmunity);
   const entrants = available.filter(player => !hasAnyImmunity(player));
   const required = Math.max(0, available.length - desiredPlayers);
-  if (protectedPlayers.length > desiredPlayers || required > entrants.length) {
-    showToast("Hay más jugadores inmunes que plazas. Aumenta el número de jugadores o revisa los disponibles.");
+  const infinitePlayers = available.filter(hasInfiniteImmunity);
+  if (infinitePlayers.length > desiredPlayers) {
+    showToast("Hay más jugadores con inmunidad infinita que plazas disponibles. Aumenta el número de jugadores o revisa los disponibles.");
     return;
   }
   state.maxCalled = desiredPlayers;
@@ -763,33 +774,51 @@ function createCallup() {
     const availableSet = new Set(available.map(player => String(player.id)));
     state.players.forEach(player => {
       player.status = availableSet.has(String(player.id)) ? "called" : "personal";
-      if (availableSet.has(String(player.id))) player.immunity = false;
     });
     recordCallupHistory(available.map(player => player.id), []);
   }
-  saveState(required ? `Convocatoria preparada: ${protectedPlayers.length} fijos y ${entrants.length} jugadores entran en el sorteo.` : "Convocatoria creada: todos los disponibles son fijos.");
+  saveState(required ? `Convocatoria preparada: ${protectedPlayers.length} protegidos inicialmente y ${entrants.length} jugadores sin pase.` : "Convocatoria creada: todos los disponibles son fijos.");
 }
 
 function drawCallupLottery() {
   if (!state.callup.created || state.callup.completed) return;
   const available = state.players.filter(player => state.callup.availableIds.some(id => String(id) === String(player.id)));
   const required = Math.max(0, available.length - Number(state.callup.desiredPlayers || 0));
-  const pool = state.callup.entrantIds.map(id => state.players.find(player => String(player.id) === String(id))).filter(player => player && !hasAnyImmunity(player));
-  if (required > pool.length) {
-    showToast("No hay suficientes jugadores elegibles para cubrir las plazas del sorteo.");
+  const infinitePlayers = available.filter(hasInfiniteImmunity);
+  if (infinitePlayers.length > Number(state.callup.desiredPlayers || 0)) {
+    showToast("Hay más jugadores con inmunidad infinita que plazas disponibles. Revisa cuántos jugadores quieres convocar.");
     return;
   }
-  const excluded = [];
-  for (let i = 0; i < required; i++) {
-    const index = Math.floor(Math.random() * pool.length);
-    excluded.push(pool.splice(index, 1)[0]);
+  const eligible = available.filter(player => !hasInfiniteImmunity(player));
+  const withoutPass = eligible.filter(player => !player.immunity);
+  const withPass = eligible.filter(player => player.immunity);
+  const drawFrom = (players, count) => {
+    const pool = players.slice();
+    const selected = [];
+    for (let i = 0; i < count; i++) {
+      const index = Math.floor(Math.random() * pool.length);
+      selected.push(pool.splice(index, 1)[0]);
+    }
+    return selected;
+  };
+  const resetPasses = withoutPass.length < required;
+  const excluded = resetPasses
+    ? drawFrom(withPass, Math.min(required, withPass.length))
+    : drawFrom(withoutPass, required);
+  if (resetPasses && excluded.length < required) {
+    excluded.push(...drawFrom(withoutPass, required - excluded.length));
+  }
+  if (resetPasses) {
+    state.players.forEach(player => {
+      if (!hasInfiniteImmunity(player)) player.immunity = false;
+    });
   }
   const excludedIds = excluded.map(player => player.id);
   const calledIds = available.map(player => player.id).filter(id => !excludedIds.some(excludedId => String(excludedId) === String(id)));
   state.players.forEach(player => {
     if (available.some(candidate => candidate.id === player.id)) {
       player.status = excludedIds.some(id => String(id) === String(player.id)) ? "lottery" : "called";
-      player.immunity = player.status === "lottery" && !hasInfiniteImmunity(player);
+      if (player.status === "lottery" && !hasInfiniteImmunity(player)) player.immunity = true;
     } else {
       player.status = "personal";
     }
@@ -798,10 +827,37 @@ function drawCallupLottery() {
   state.callup.excludedIds = excludedIds;
   state.callup.completed = true;
   recordCallupHistory(calledIds, excludedIds);
-  saveState(required ? `Sorteo completado: ${required} desconvocatorias.` : "Convocatoria confirmada.");
+  saveState(required ? `Sorteo completado: ${required} desconvocatorias${resetPasses ? " y pases temporales reiniciados" : ""}.` : "Convocatoria confirmada.");
 }
 
 document.addEventListener("change", event => {
+  if (event.target.matches('[data-field="position"]')) {
+    const row = event.target.closest("[data-player-id]");
+    const goalKeeper = event.target.value === "Portero";
+    const status = row.querySelector('[data-field="status"]');
+    const lotteryOption = status.querySelector('option[value="lottery"]');
+    const infinite = row.querySelector('[data-field="infiniteImmunity"]');
+    const temporary = row.querySelector('[data-field="immunity"]');
+    lotteryOption.disabled = goalKeeper;
+    if (goalKeeper && status.value === "lottery") status.value = "called";
+    infinite.disabled = goalKeeper;
+    temporary.disabled = goalKeeper || infinite.checked;
+    if (goalKeeper) {
+      infinite.checked = true;
+      temporary.checked = true;
+    }
+  }
+  if (event.target.matches('[data-field="immunity"]')) {
+    const infinite = event.target.closest("[data-player-id]").querySelector('[data-field="infiniteImmunity"]');
+    if (infinite.checked) event.target.checked = true;
+  }
+  if (event.target.matches('[data-field="infiniteImmunity"]')) {
+    const row = event.target.closest("[data-player-id]");
+    const temporary = row.querySelector('[data-field="immunity"]');
+    const goalKeeper = row.querySelector('[data-field="position"]').value === "Portero";
+    temporary.disabled = goalKeeper || event.target.checked;
+    if (event.target.checked) temporary.checked = true;
+  }
   if (event.target.id === "new-match-opponent") {
     const regularFields = document.querySelectorAll("[data-regular-match-field]");
     regularFields.forEach(field => { field.hidden = event.target.value === "Descanso"; });
@@ -891,8 +947,8 @@ document.addEventListener("click", event => {
     const home = card.querySelector('[data-match-field="home"]').value.trim();
     const away = card.querySelector('[data-match-field="away"]').value.trim();
     const score = card.querySelector('[data-match-field="score"]').value.trim() || "—";
-    if (!match || !Number.isInteger(round) || round < 1 || !dateToISO(date) || !home || !away) {
-      showToast("Revisa la jornada, la fecha y los equipos.");
+    if (!match || !Number.isInteger(round) || round < 1 || (date && !dateToISO(date)) || (time && !validTime(time)) || !home || !away) {
+      showToast("Revisa la jornada, la fecha y hora (si las has indicado) y los equipos.");
       return;
     }
     if (state.matches.some((other, index) => index !== matchIndex && Number(other.round) === round)) {
@@ -947,8 +1003,9 @@ document.addEventListener("click", event => {
       linkedCallup.date = match.date;
     }
     const nextFixture = state.matches
-      .filter(other => other !== match && other.score === "—" && dateToISO(other.date) >= localDateISO())
-      .sort((a, b) => dateToISO(a.date).localeCompare(dateToISO(b.date)) || a.round - b.round)[0];
+      .filter(other => other !== match && other.score === "—" && (!dateToISO(other.date) || dateToISO(other.date) >= localDateISO()))
+      .slice()
+      .sort(compareMatchesBySchedule)[0];
     if (wasNextMatch && score !== "—") {
       if (nextFixture) setNextMatchFromFixture(nextFixture);
       else state.match = { round: nextRoundNumber(), opponent: "", date: "", time: "—", venue: HOME_VENUE };
@@ -990,8 +1047,8 @@ document.addEventListener("click", event => {
     const opponent = document.querySelector("#new-match-opponent").value;
     const location = document.querySelector("#new-match-location").value;
     const isRest = opponent === "Descanso";
-    if (!Number.isInteger(round) || round < 1 || !dateToISO(date) || !opponent || (!isRest && !validTime(time))) {
-      showToast("Indica una jornada y fecha; los partidos también necesitan una hora válida.");
+    if (!Number.isInteger(round) || round < 1 || (date && !dateToISO(date)) || (time && !validTime(time)) || !opponent) {
+      showToast("Indica una jornada y revisa la fecha y hora si las has añadido.");
       return;
     }
     if (state.matches.some(match => Number(match.round) === round)) {
@@ -1111,11 +1168,13 @@ document.addEventListener("click", event => {
       const player = state.players.find(item => String(item.id) === row.dataset.playerId);
       if (!player) return;
       const status = row.querySelector('[data-field="status"]').value;
-      const immunity = row.querySelector('[data-field="immunity"]').checked;
-      const infiniteImmunity = isGoalkeeper(player) || row.querySelector('[data-field="infiniteImmunity"]').checked;
+      const position = row.querySelector('[data-field="position"]').value;
+      const infiniteImmunity = position === "Portero" || row.querySelector('[data-field="infiniteImmunity"]').checked;
+      const immunity = infiniteImmunity || row.querySelector('[data-field="immunity"]').checked;
       player.dorsal = Number(row.querySelector('[data-field="dorsal"]').value);
-      if (player.status !== status || player.immunity !== immunity || player.infiniteImmunity !== infiniteImmunity) callupNeedsRefresh = true;
+      if (player.status !== status || player.position !== position || player.immunity !== immunity || player.infiniteImmunity !== infiniteImmunity) callupNeedsRefresh = true;
       player.status = status;
+      player.position = position;
       player.goals = Math.max(0, Number(row.querySelector('[data-field="goals"]').value) || 0);
       player.yellow = Math.max(0, Number(row.querySelector('[data-field="yellow"]').value) || 0);
       player.red = Math.max(0, Number(row.querySelector('[data-field="red"]').value) || 0);
