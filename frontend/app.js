@@ -491,8 +491,40 @@ function renderCalls() {
 
 function renderCallupHistory() {
   const history = state.callupHistory.slice().sort((a, b) => Number(a.round) - Number(b.round));
-  const rounds = Array.from(new Set(history.map(entry => Number(entry.round)).filter(Number.isInteger)));
+  const upcomingMatches = state.matches
+    .filter(match => match.score === "—" && dateToISO(match.date) >= localDateISO() && !isRestMatch(match))
+    .slice()
+    .sort((a, b) => dateToISO(a.date).localeCompare(dateToISO(b.date)) || a.round - b.round);
+  const scheduledRounds = new Map();
+  history.forEach(entry => {
+    scheduledRounds.set(Number(entry.round), { entry, date: dateToISO(entry.date) });
+  });
+  upcomingMatches.forEach(match => {
+    const round = Number(match.round);
+    const existing = scheduledRounds.get(round);
+    scheduledRounds.set(round, {
+      entry: existing ? existing.entry : null,
+      date: dateToISO(match.date) || (existing && existing.date) || ""
+    });
+  });
+  const matchDate = dateToISO(state.match.date);
+  const hasStandaloneNextMatch = Boolean(state.match.opponent && state.match.opponent !== "Descanso" &&
+    matchDate >= localDateISO() && !scheduledRounds.has(Number(state.match.round)));
+  if (hasStandaloneNextMatch) {
+    scheduledRounds.set(Number(state.match.round), { entry: null, date: matchDate });
+  }
+  const currentRound = upcomingMatches.length
+    ? Number(upcomingMatches[0].round)
+    : hasStandaloneNextMatch ? Number(state.match.round) : null;
+  const rounds = Array.from(scheduledRounds.keys()).filter(Number.isInteger).sort((a, b) => a - b);
   const statusNames = { called: "Convocado", personal: "Motivos personales", lottery: "Desconvocado por sorteo" };
+  function statusForRound(round, player) {
+    if (round === currentRound) return player.status;
+    const info = scheduledRounds.get(round);
+    return info && info.entry && info.entry.statuses
+      ? info.entry.statuses[String(player.id)] || ""
+      : "";
+  }
   document.querySelector("#page-historial").innerHTML = `
     <div class="page-heading"><div><div class="eyebrow">TEMPORADA 25/26</div><h1 id="history-title">Historial de convocatorias</h1><p>Un resumen visual de la situación de cada jugador en cada jornada.</p></div><span class="count-pill">${rounds.length} ${rounds.length === 1 ? "jornada" : "jornadas"}</span></div>
     <div class="history-legend" aria-label="Leyenda del historial">
@@ -501,19 +533,20 @@ function renderCallupHistory() {
       <span class="history-legend-item"><i class="history-status lottery"></i>Desconvocado por sorteo</span>
       <span class="history-legend-item"><i class="history-status unrecorded"></i>Sin registro</span>
     </div>
-    ${history.length ? "" : `<div class="card history-empty"><strong>Aún no hay jornadas en el historial.</strong><span>Las convocatorias se añadirán aquí al confirmar cada sorteo.</span></div>`}
+    ${rounds.length ? "" : `<div class="card history-empty"><strong>Aún no hay jornadas en el historial.</strong><span>Las convocatorias se añadirán aquí al confirmar cada sorteo.</span></div>`}
     <section class="card history-card">
       <div class="table-wrap">
         <table class="history-table">
           <thead><tr><th>Jugador</th>${rounds.map(round => {
-            const entry = history.find(item => Number(item.round) === round);
-            return `<th><span>J${round}</span>${entry && entry.date ? `<small>${escapeHtml(formatDate(entry.date))}</small>` : ""}</th>`;
+            const info = scheduledRounds.get(round);
+            const isCurrent = round === currentRound;
+            const date = info && info.date;
+            return `<th><span>J${round}${isCurrent ? " · PRÓXIMA" : ""}</span>${date ? `<small>${escapeHtml(formatDate(date))}</small>` : ""}</th>`;
           }).join("")}<th>Resumen</th></tr></thead>
           <tbody>${state.players.map((player, index) => {
             const statusCounts = { called: 0, personal: 0, lottery: 0 };
             const cells = rounds.map(round => {
-              const entry = history.find(item => Number(item.round) === round);
-              const status = entry && entry.statuses && entry.statuses[String(player.id)] || "";
+              const status = statusForRound(round, player);
               const isKnownStatus = Object.prototype.hasOwnProperty.call(statusCounts, status);
               if (isKnownStatus) statusCounts[status]++;
               const label = isKnownStatus ? statusNames[status] : "Sin registro";
